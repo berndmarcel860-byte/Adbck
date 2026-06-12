@@ -13,7 +13,7 @@ class Auth {
         
         // Only start session if not already started
         if (session_status() === PHP_SESSION_NONE) {
-            // session_start removed - handled by parent
+            session_start();
         }
         
         if ($this->isLoggedIn()) {
