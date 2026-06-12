@@ -8,8 +8,21 @@ require_once __DIR__ . '/../assets/auth/auth.php';
 $auth = new Auth();
 $auth->requireLogin();
 
+function buildUpstreamUrl($path) {
+    if (preg_match('/^https?:\/\//i', $path)) {
+        return $path;
+    }
+
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (isset($_SERVER['SERVER_PORT']) && (int) $_SERVER['SERVER_PORT'] === 443);
+    $scheme = $isHttps ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+
+    return $scheme . '://' . $host . '/' . ltrim($path, '/');
+}
+
 function fetchJsonFromUpstream($path, $timeout = 5) {
-    $ch = curl_init($path);
+    $ch = curl_init(buildUpstreamUrl($path));
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
