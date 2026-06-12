@@ -88,6 +88,22 @@ class Auth {
     private function domainToPattern($domain) {
         return '%' . $domain;
     }
+
+    private function isSameDomainOrSubdomain($domainName, $mainDomain) {
+        $domainName = strtolower(trim((string)$domainName, ". \t\n\r\0\x0B"));
+        $mainDomain = strtolower(trim((string)$mainDomain, ". \t\n\r\0\x0B"));
+
+        if ($domainName === '' || $mainDomain === '') {
+            return false;
+        }
+
+        if ($domainName === $mainDomain) {
+            return true;
+        }
+
+        $suffix = '.' . $mainDomain;
+        return strlen($domainName) > strlen($mainDomain) && substr($domainName, -strlen($suffix)) === $suffix;
+    }
     
     public function canAccessDomain($domainName) {
         if (in_array('*', $this->accessibleDomains)) return true;
@@ -96,7 +112,7 @@ class Auth {
         foreach ($this->accessiblePatterns as $pattern) {
             if (strpos($pattern, '%') === 0) {
                 $mainDomain = substr($pattern, 1);
-                if (strpos($domainName, $mainDomain) !== false && $domainName !== $mainDomain) {
+                if ($this->isSameDomainOrSubdomain($domainName, $mainDomain)) {
                     return true;
                 }
             }
