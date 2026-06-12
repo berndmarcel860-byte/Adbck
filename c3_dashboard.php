@@ -224,7 +224,7 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
     async function fetchDashboardData(forceReload = false) {
         if (dataLoaded && !forceReload) return;
 
-        const response = await fetch('/admin/api/getFilteredSessions.php');
+        const response = await fetch('api/getFilteredSessions.php');
         const data = await response.json();
 
         if (!response.ok || !data.success) {

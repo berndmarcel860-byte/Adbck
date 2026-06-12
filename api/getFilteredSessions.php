@@ -16,16 +16,18 @@ function buildUpstreamUrl($path) {
     $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
         || (isset($_SERVER['SERVER_PORT']) && (int) $_SERVER['SERVER_PORT'] === 443);
     $scheme = $isHttps ? 'https' : 'http';
-    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $host = $_SERVER['SERVER_NAME'] ?? 'localhost';
+    $port = isset($_SERVER['SERVER_PORT']) ? (int) $_SERVER['SERVER_PORT'] : null;
+    $isDefaultPort = !$port || (!$isHttps && $port === 80) || ($isHttps && $port === 443);
+    $hostWithPort = $isDefaultPort ? $host : $host . ':' . $port;
 
-    return $scheme . '://' . $host . '/' . ltrim($path, '/');
+    return $scheme . '://' . $hostWithPort . '/' . ltrim($path, '/');
 }
 
 function fetchJsonFromUpstream($path, $timeout = 5) {
     $ch = curl_init(buildUpstreamUrl($path));
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     $response = curl_exec($ch);
     $error = curl_error($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
