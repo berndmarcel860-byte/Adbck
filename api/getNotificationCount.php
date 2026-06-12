@@ -16,6 +16,6 @@ try {
     $row = $stmt->fetch();
     echo json_encode(['success' => true, 'count' => (int)$row['cnt']]);
 } catch (Exception $e) {
-    echo json_encode(['success' => true, 'count' => 0]);
+    echo json_encode(['success' => false, 'error' => 'Failed to get notification count']);
 }
 ?>

@@ -201,6 +201,7 @@ $uniqueDomains = array_unique($domainsList);
             .main-content { margin-left: 70px; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
         }
+        .notification-unread { background: #f0f4ff; }
     </style>
 </head>
 <body>
@@ -608,7 +609,7 @@ $uniqueDomains = array_unique($domainsList);
                         <td>${p.can_edit ? '✔' : ''}</td>
                         <td>${p.can_delete ? '✔' : ''}</td>
                         <td>${p.can_send_commands ? '✔' : ''}</td>
-                        <td><button class="btn btn-xs btn-sm btn-danger" onclick="removePermission(${userId},${p.domain_id})"><i class="fas fa-times"></i></button></td>
+                        <td><button class="btn btn-sm btn-danger" onclick="removePermission(${userId},${p.domain_id})"><i class="fas fa-times"></i></button></td>
                     </tr>`;
                 }
                 document.getElementById('currentPermissionsTable').innerHTML = rows || '<tr><td colspan="6" class="text-center text-muted">No permissions assigned</td></tr>';
@@ -718,7 +719,7 @@ $uniqueDomains = array_unique($domainsList);
             for (const notif of notifications) {
                 const color = typeColors[notif.type] || 'bg-secondary';
                 items += `
-                    <div class="list-group-item list-group-item-action ${!notif.is_read ? 'fw-semibold' : ''}" style="${!notif.is_read ? 'background:#f0f4ff' : ''}">
+                    <div class="list-group-item list-group-item-action ${!notif.is_read ? 'notification-unread fw-semibold' : ''}">
                         <div class="d-flex justify-content-between align-items-start gap-2">
                             <div>
                                 <span class="badge ${color} me-2">${escapeHtml(notif.type)}</span>
@@ -884,8 +885,8 @@ $uniqueDomains = array_unique($domainsList);
             showToast('Passwords do not match', 'error');
             return;
         }
-        if (newPass.length < 6) {
-            showToast('Password must be at least 6 characters', 'error');
+        if (newPass.length < 8) {
+            showToast('Password must be at least 8 characters', 'error');
             return;
         }
         

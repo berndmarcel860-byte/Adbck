@@ -12,8 +12,8 @@ if (empty($current) || empty($newPass)) {
     echo json_encode(['success' => false, 'error' => 'Current and new passwords are required']);
     exit;
 }
-if (strlen($newPass) < 6) {
-    echo json_encode(['success' => false, 'error' => 'New password must be at least 6 characters']);
+if (strlen($newPass) < 8) {
+    echo json_encode(['success' => false, 'error' => 'New password must be at least 8 characters']);
     exit;
 }
 try {
