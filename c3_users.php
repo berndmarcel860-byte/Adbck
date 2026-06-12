@@ -1,7 +1,9 @@
 <?php
 // c3_users.php - User Management with Subdomain Support
 session_start();
+require_once __DIR__ . '/assets/config/db_config.php';
 require_once __DIR__ . '/assets/auth/auth.php';
+$auth = new Auth();
 $auth->requireRole(['super_admin', 'admin']);
 
 $pdo = getDBConnection();
