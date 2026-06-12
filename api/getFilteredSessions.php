@@ -34,16 +34,16 @@ function fetchJsonFromUpstream($path, $timeout = 5) {
     curl_close($ch);
 
     if ($response === false) {
-        throw new RuntimeException($error ?: 'Request failed');
+        throw new RuntimeException('Failed to fetch ' . $path . ': ' . ($error ?: 'Request failed'));
     }
 
     if ($httpCode >= 400) {
-        throw new RuntimeException('Upstream returned HTTP ' . $httpCode);
+        throw new RuntimeException('Failed to fetch ' . $path . ': upstream returned HTTP ' . $httpCode);
     }
 
     $data = json_decode($response, true);
     if (!is_array($data)) {
-        throw new RuntimeException('Invalid upstream JSON response');
+        throw new RuntimeException('Failed to fetch ' . $path . ': invalid upstream JSON response');
     }
 
     return $data;

@@ -240,7 +240,7 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
         let sessions = [...allSessions];
 
         if (currentFilter === 'online') {
-            const onlineSocketIds = new Set(onlineClients.filter(c => c.status === 'online').map(c => c.socketId));
+            const onlineSocketIds = new Set(onlineClients.filter(c => c.status === 'online' && c.socketId).map(c => c.socketId));
             sessions = sessions.filter(session => onlineSocketIds.has(session.socketId));
         } else if (currentFilter === 'profile') {
             sessions = sessions.filter(session => session.profile_name || session.profile_email);
@@ -253,7 +253,7 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
                 (session.socketId && session.socketId.toLowerCase().includes(currentSearch)) ||
                 (session.profile_name && session.profile_name.toLowerCase().includes(currentSearch)) ||
                 (session.profile_email && session.profile_email.toLowerCase().includes(currentSearch)) ||
-                (session.profile_phone && String(session.profile_phone).toLowerCase().includes(currentSearch)) ||
+                (session.profile_phone && String(session.profile_phone).includes(currentSearch)) ||
                 (session.login_email && session.login_email.toLowerCase().includes(currentSearch)) ||
                 (session.domain && session.domain.toLowerCase().includes(currentSearch)) ||
                 (session.clientIp && String(session.clientIp).toLowerCase().includes(currentSearch))
@@ -265,7 +265,7 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
 
     function getStats() {
         const sessions = getFilteredSessions();
-        const onlineSocketIds = new Set(onlineClients.filter(c => c.status === 'online').map(c => c.socketId));
+        const onlineSocketIds = new Set(onlineClients.filter(c => c.status === 'online' && c.socketId).map(c => c.socketId));
         const profiles = sessions.filter(session => session.profile_name || session.profile_email).length;
         const logins = sessions.filter(session => session.login_email).length;
         const online = sessions.filter(session => onlineSocketIds.has(session.socketId)).length;
@@ -344,7 +344,7 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
     function renderSessionGroups() {
         const sessions = getFilteredSessions();
         const grouped = {};
-        const onlineSocketIds = new Set(onlineClients.filter(c => c.status === 'online').map(c => c.socketId));
+        const onlineSocketIds = new Set(onlineClients.filter(c => c.status === 'online' && c.socketId).map(c => c.socketId));
 
         for (const session of sessions) {
             const domain = session.domain || 'unknown';
