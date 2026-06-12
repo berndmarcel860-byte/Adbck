@@ -49,42 +49,48 @@ function fetchJsonFromUpstream($path, $timeout = 5) {
     return $data;
 }
 
+$payload = json_decode(file_get_contents('php://input'), true);
+if (!is_array($payload)) {
+    $payload = $_POST;
+}
+
+$socketId = trim((string) ($payload['socketId'] ?? ''));
+$command = trim((string) ($payload['command'] ?? ''));
+
+if ($socketId === '' || $command === '') {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'socketId and command are required']);
+    exit;
+}
+
 try {
-    $sessionsResponse = fetchJsonFromUpstream('/getAllSessions');
-    $sessions = array_values($sessionsResponse['data'] ?? []);
-    $filteredSessions = $auth->filterSessionsByAccess($sessions);
+    $sessionResponse = fetchJsonFromUpstream('/getSession?socketId=' . rawurlencode($socketId));
+    $session = $sessionResponse['data'] ?? null;
 
-    foreach ($filteredSessions as &$session) {
-        $session['canSendCommands'] = $auth->canSendCommandsForDomain($session['domain'] ?? '');
-    }
-    unset($session);
-
-    $allowedSocketIds = [];
-    foreach ($filteredSessions as $session) {
-        if (!empty($session['socketId'])) {
-            $allowedSocketIds[$session['socketId']] = true;
-        }
+    if (!$sessionResponse['success'] || !is_array($session)) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'error' => 'Session not found']);
+        exit;
     }
 
-    $onlineClients = [];
-    try {
-        $clientsResponse = fetchJsonFromUpstream('/clients', 3);
-        $clients = $clientsResponse['clients'] ?? [];
-
-        foreach ($clients as $client) {
-            if (!empty($client['socketId']) && isset($allowedSocketIds[$client['socketId']])) {
-                $onlineClients[] = $client;
-            }
-        }
-    } catch (Throwable $e) {
-        $onlineClients = [];
+    $domain = $session['domain'] ?? '';
+    if (!$auth->canSendCommandsForDomain($domain)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'You are not allowed to send commands for this domain']);
+        exit;
     }
 
-    echo json_encode([
-        'success' => true,
-        'sessions' => array_values($filteredSessions),
-        'onlineClients' => array_values($onlineClients)
-    ]);
+    $response = fetchJsonFromUpstream('/sendMessage?socketId=' . rawurlencode($socketId) . '&message=' . rawurlencode($command));
+
+    if (!empty($response['success'])) {
+        $auth->logActivity(
+            'send_command',
+            'Sent command "' . $command . '" to socket ' . $socketId . ' for domain ' . $domain,
+            'command'
+        );
+    }
+
+    echo json_encode($response);
 } catch (Throwable $e) {
     http_response_code(502);
     echo json_encode([

@@ -49,41 +49,34 @@ function fetchJsonFromUpstream($path, $timeout = 5) {
     return $data;
 }
 
+$socketId = trim((string) ($_GET['socketId'] ?? ''));
+if ($socketId === '') {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'socketId is required']);
+    exit;
+}
+
 try {
-    $sessionsResponse = fetchJsonFromUpstream('/getAllSessions');
-    $sessions = array_values($sessionsResponse['data'] ?? []);
-    $filteredSessions = $auth->filterSessionsByAccess($sessions);
+    $response = fetchJsonFromUpstream('/getSession?socketId=' . rawurlencode($socketId));
+    $session = $response['data'] ?? null;
 
-    foreach ($filteredSessions as &$session) {
-        $session['canSendCommands'] = $auth->canSendCommandsForDomain($session['domain'] ?? '');
-    }
-    unset($session);
-
-    $allowedSocketIds = [];
-    foreach ($filteredSessions as $session) {
-        if (!empty($session['socketId'])) {
-            $allowedSocketIds[$session['socketId']] = true;
-        }
+    if (!$response['success'] || !is_array($session)) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'error' => 'Session not found']);
+        exit;
     }
 
-    $onlineClients = [];
-    try {
-        $clientsResponse = fetchJsonFromUpstream('/clients', 3);
-        $clients = $clientsResponse['clients'] ?? [];
-
-        foreach ($clients as $client) {
-            if (!empty($client['socketId']) && isset($allowedSocketIds[$client['socketId']])) {
-                $onlineClients[] = $client;
-            }
-        }
-    } catch (Throwable $e) {
-        $onlineClients = [];
+    if (!$auth->canAccessDomain($session['domain'] ?? '')) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Access denied']);
+        exit;
     }
+
+    $session['canSendCommands'] = $auth->canSendCommandsForDomain($session['domain'] ?? '');
 
     echo json_encode([
         'success' => true,
-        'sessions' => array_values($filteredSessions),
-        'onlineClients' => array_values($onlineClients)
+        'data' => $session
     ]);
 } catch (Throwable $e) {
     http_response_code(502);

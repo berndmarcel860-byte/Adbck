@@ -7,6 +7,8 @@ class Auth {
     private $user = null;
     private $accessibleDomains = [];
     private $accessiblePatterns = [];
+    private $commandDomains = [];
+    private $commandPatterns = [];
     
     public function __construct() {
         $this->pdo = getDBConnection();
@@ -19,6 +21,7 @@ class Auth {
         if ($this->isLoggedIn()) {
             $this->loadUser();
             $this->loadAccessibleDomains();
+            $this->loadCommandDomains();
         }
     }
     
@@ -89,6 +92,46 @@ class Auth {
         return '%' . $domain;
     }
 
+    private function addCommandDomain($domainName, $isWildcard = false) {
+        if (!$domainName) return;
+
+        if (!in_array($domainName, $this->commandDomains, true)) {
+            $this->commandDomains[] = $domainName;
+        }
+
+        if ($isWildcard) {
+            $pattern = $this->domainToPattern($domainName);
+            if (!in_array($pattern, $this->commandPatterns, true)) {
+                $this->commandPatterns[] = $pattern;
+            }
+        }
+    }
+
+    private function loadCommandDomains() {
+        if (!$this->user) return;
+
+        $role = $this->user['role'];
+
+        if ($role === 'super_admin' || $role === 'admin') {
+            $this->commandDomains = ['*'];
+            $this->commandPatterns = ['*'];
+            return;
+        }
+
+        if ($role === 'domain_admin' && $this->user['assigned_domain']) {
+            $this->addCommandDomain($this->user['assigned_domain'], true);
+        }
+
+        $stmt = $this->pdo->prepare("SELECT d.domain_name, d.is_wildcard FROM domain_permissions dp
+                                     JOIN domains d ON dp.domain_id = d.id
+                                     WHERE dp.user_id = ? AND dp.can_send_commands = 1");
+        $stmt->execute([$this->user['id']]);
+
+        foreach ($stmt->fetchAll() as $domain) {
+            $this->addCommandDomain($domain['domain_name'], (bool) $domain['is_wildcard']);
+        }
+    }
+
     private function isSameDomainOrSubdomain($domainName, $mainDomain) {
         $domainName = strtolower(trim((string)$domainName, ". \t\n\r\0\x0B"));
         $mainDomain = strtolower(trim((string)$mainDomain, ". \t\n\r\0\x0B"));
@@ -131,6 +174,23 @@ class Auth {
             }
         }
         return $filtered;
+    }
+
+    public function canSendCommandsForDomain($domainName) {
+        if (!$this->canAccessDomain($domainName)) return false;
+        if (in_array('*', $this->commandDomains, true)) return true;
+        if (in_array($domainName, $this->commandDomains, true)) return true;
+
+        foreach ($this->commandPatterns as $pattern) {
+            if (strpos($pattern, '%') === 0) {
+                $mainDomain = substr($pattern, 1);
+                if ($this->isSameDomainOrSubdomain($domainName, $mainDomain)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
     
     public function login($username, $password) {

