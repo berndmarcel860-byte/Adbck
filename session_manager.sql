@@ -727,6 +727,14 @@ ALTER TABLE `user_activity`
   ADD CONSTRAINT `user_activity_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL;
 COMMIT;
 
+-- --------------------------------------------------------
+-- Migration: Add per-user Telegram notification settings
+-- Run this if upgrading from an earlier schema version
+-- --------------------------------------------------------
+ALTER TABLE `users`
+    ADD COLUMN IF NOT EXISTS `telegram_bot_token` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Per-user Telegram bot token for domain notifications',
+    ADD COLUMN IF NOT EXISTS `telegram_chat_id` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Per-user Telegram chat/channel ID for domain notifications';
+
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
 /*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;

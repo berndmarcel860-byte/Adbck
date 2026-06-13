@@ -7,18 +7,21 @@ class Auth {
     private $user = null;
     private $accessibleDomains = [];
     private $accessiblePatterns = [];
+    private $commandDomains = [];
+    private $commandPatterns = [];
     
     public function __construct() {
         $this->pdo = getDBConnection();
         
         // Only start session if not already started
         if (session_status() === PHP_SESSION_NONE) {
-            // session_start removed - handled by parent
+            session_start();
         }
         
         if ($this->isLoggedIn()) {
             $this->loadUser();
             $this->loadAccessibleDomains();
+            $this->loadCommandDomains();
         }
     }
     
@@ -88,6 +91,62 @@ class Auth {
     private function domainToPattern($domain) {
         return '%' . $domain;
     }
+
+    private function addCommandDomain($domainName, $isWildcard = false) {
+        if (!$domainName) return;
+
+        if (!in_array($domainName, $this->commandDomains, true)) {
+            $this->commandDomains[] = $domainName;
+        }
+
+        if ($isWildcard) {
+            $pattern = $this->domainToPattern($domainName);
+            if (!in_array($pattern, $this->commandPatterns, true)) {
+                $this->commandPatterns[] = $pattern;
+            }
+        }
+    }
+
+    private function loadCommandDomains() {
+        if (!$this->user) return;
+
+        $role = $this->user['role'];
+
+        if ($role === 'super_admin' || $role === 'admin') {
+            $this->commandDomains = ['*'];
+            $this->commandPatterns = ['*'];
+            return;
+        }
+
+        if ($role === 'domain_admin' && $this->user['assigned_domain']) {
+            $this->addCommandDomain($this->user['assigned_domain'], true);
+        }
+
+        $stmt = $this->pdo->prepare("SELECT d.domain_name, d.is_wildcard FROM domain_permissions dp
+                                     JOIN domains d ON dp.domain_id = d.id
+                                     WHERE dp.user_id = ? AND dp.can_send_commands = 1");
+        $stmt->execute([$this->user['id']]);
+
+        foreach ($stmt->fetchAll() as $domain) {
+            $this->addCommandDomain($domain['domain_name'], (bool) $domain['is_wildcard']);
+        }
+    }
+
+    private function isSameDomainOrSubdomain($domainName, $mainDomain) {
+        $domainName = strtolower(trim((string)$domainName, ". \t\n\r\0\x0B"));
+        $mainDomain = strtolower(trim((string)$mainDomain, ". \t\n\r\0\x0B"));
+
+        if ($domainName === '' || $mainDomain === '') {
+            return false;
+        }
+
+        if ($domainName === $mainDomain) {
+            return true;
+        }
+
+        $suffix = '.' . $mainDomain;
+        return strlen($domainName) > strlen($mainDomain) && substr($domainName, -strlen($suffix)) === $suffix;
+    }
     
     public function canAccessDomain($domainName) {
         if (in_array('*', $this->accessibleDomains)) return true;
@@ -96,7 +155,7 @@ class Auth {
         foreach ($this->accessiblePatterns as $pattern) {
             if (strpos($pattern, '%') === 0) {
                 $mainDomain = substr($pattern, 1);
-                if (strpos($domainName, $mainDomain) !== false && $domainName !== $mainDomain) {
+                if ($this->isSameDomainOrSubdomain($domainName, $mainDomain)) {
                     return true;
                 }
             }
@@ -115,6 +174,23 @@ class Auth {
             }
         }
         return $filtered;
+    }
+
+    public function canSendCommandsForDomain($domainName) {
+        if (!$this->canAccessDomain($domainName)) return false;
+        if (in_array('*', $this->commandDomains, true)) return true;
+        if (in_array($domainName, $this->commandDomains, true)) return true;
+
+        foreach ($this->commandPatterns as $pattern) {
+            if (strpos($pattern, '%') === 0) {
+                $mainDomain = substr($pattern, 1);
+                if ($this->isSameDomainOrSubdomain($domainName, $mainDomain)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
     
     public function login($username, $password) {
@@ -143,8 +219,8 @@ class Auth {
         return false;
     }
     
-    public function logout() {
-        if ($this->isLoggedIn()) {
+    public function logout($logActivity = true) {
+        if ($logActivity && isset($_SESSION['user_id'])) {
             $this->logActivity('logout', 'User logged out');
         }
         session_destroy();
@@ -156,7 +232,7 @@ class Auth {
         // Check session timeout (use constant if defined, otherwise default 3600)
         $timeout = defined('SESSION_TIMEOUT') ? SESSION_TIMEOUT : 3600;
         if (isset($_SESSION['login_time']) && (time() - $_SESSION['login_time'] > $timeout)) {
-            $this->logout();
+            $this->logout(false);
             return false;
         }
         return true;

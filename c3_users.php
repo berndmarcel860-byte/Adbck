@@ -1,12 +1,36 @@
 <?php
 // c3_users.php - User Management with Subdomain Support
 session_start();
+require_once __DIR__ . '/assets/config/db_config.php';
 require_once __DIR__ . '/assets/auth/auth.php';
+$auth = new Auth();
 $auth->requireRole(['super_admin', 'admin']);
 
 $pdo = getDBConnection();
 $message = '';
 $error = '';
+
+// Node server base URL (must match PORT in 0.js)
+define('NODE_SERVER_URL', 'http://localhost:8087');
+
+/**
+ * Tell the node server about a user's Telegram config and domain scope.
+ */
+function notifyNodeTelegramConfig(int $userId, string $domain, string $botToken, string $chatId): void {
+    $ch = curl_init(NODE_SERVER_URL . '/setDomainTelegram');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 3);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+        'userId'  => $userId,
+        'domain'  => $domain,
+        'token'   => $botToken,
+        'chatId'  => $chatId,
+    ]));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    curl_exec($ch);
+    curl_close($ch);
+}
 
 // Handle user creation/update
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -19,17 +43,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $full_name = $_POST['full_name'] ?? '';
         $role = $_POST['role'] ?? 'viewer';
         $assigned_domain = $_POST['assigned_domain'] ?? null;
+        $telegram_bot_token = trim($_POST['telegram_bot_token'] ?? '') ?: null;
+        $telegram_chat_id   = trim($_POST['telegram_chat_id']   ?? '') ?: null;
         
         if (empty($username) || empty($password)) {
             $error = 'Username and password are required';
         } else {
             $hashed = password_hash($password, PASSWORD_DEFAULT);
             try {
-                $stmt = $pdo->prepare("INSERT INTO users (username, password, email, full_name, role, assigned_domain, created_by) 
-                                       VALUES (?, ?, ?, ?, ?, ?, ?)");
-                $stmt->execute([$username, $hashed, $email, $full_name, $role, $assigned_domain, $_SESSION['user_id']]);
+                $stmt = $pdo->prepare("INSERT INTO users (username, password, email, full_name, role, assigned_domain, telegram_bot_token, telegram_chat_id, created_by) 
+                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                $stmt->execute([$username, $hashed, $email, $full_name, $role, $assigned_domain, $telegram_bot_token, $telegram_chat_id, $_SESSION['user_id']]);
+                $newUserId = (int)$pdo->lastInsertId();
                 $message = "User {$username} created successfully";
                 $auth->logActivity('create_user', "Created user: {$username}");
+                // Propagate Telegram config to node server immediately
+                if ($assigned_domain && $telegram_bot_token && $telegram_chat_id) {
+                    notifyNodeTelegramConfig($newUserId, $assigned_domain, $telegram_bot_token, $telegram_chat_id);
+                }
             } catch(PDOException $e) {
                 $error = "Failed to create user: " . $e->getMessage();
             }
@@ -43,12 +74,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $role = $_POST['role'] ?? 'viewer';
         $assigned_domain = $_POST['assigned_domain'] ?? null;
         $is_active = isset($_POST['is_active']) ? 1 : 0;
+        $telegram_bot_token = trim($_POST['telegram_bot_token'] ?? '') ?: null;
+        $telegram_chat_id   = trim($_POST['telegram_chat_id']   ?? '') ?: null;
         
         try {
-            $stmt = $pdo->prepare("UPDATE users SET email = ?, full_name = ?, role = ?, assigned_domain = ?, is_active = ? WHERE id = ?");
-            $stmt->execute([$email, $full_name, $role, $assigned_domain, $is_active, $user_id]);
+            $stmt = $pdo->prepare("UPDATE users SET email = ?, full_name = ?, role = ?, assigned_domain = ?, is_active = ?, telegram_bot_token = ?, telegram_chat_id = ? WHERE id = ?");
+            $stmt->execute([$email, $full_name, $role, $assigned_domain, $is_active, $telegram_bot_token, $telegram_chat_id, $user_id]);
             $message = "User updated successfully";
             $auth->logActivity('update_user', "Updated user ID: {$user_id}");
+            // Propagate Telegram config to node server immediately
+            if ($assigned_domain && $telegram_bot_token && $telegram_chat_id) {
+                notifyNodeTelegramConfig((int)$user_id, $assigned_domain, $telegram_bot_token, $telegram_chat_id);
+            }
         } catch(PDOException $e) {
             $error = "Failed to update user: " . $e->getMessage();
         }
@@ -195,8 +232,16 @@ if (isset($sessionsData['data'])) {
                             <?php endforeach; ?>
                         </select>
                     </div>
+                    <!-- Telegram Notification Config -->
                     <div class="col-12">
+                        <hr class="my-1">
+                        <small class="text-muted"><i class="fab fa-telegram"></i> Telegram notifications — optional. If set, all domain/subdomain session alerts go only to this bot &amp; channel.</small>
+                    </div>
+                    <div class="col-md-5"><input type="text" name="telegram_bot_token" class="form-control" placeholder="Telegram Bot Token (e.g. 123456:ABC...)"></div>
+                    <div class="col-md-3"><input type="text" name="telegram_chat_id" class="form-control" placeholder="Telegram Chat/Channel ID (e.g. -1001...)"></div>
+                    <div class="col-md-4">
                         <button type="submit" class="btn btn-primary">Create User</button>
+                        <small class="text-muted ms-2">Bot token &amp; chat ID are optional</small>
                     </div>
                 </form>
             </div>
@@ -210,7 +255,7 @@ if (isset($sessionsData['data'])) {
             <div class="card-body p-0">
                 <table class="table mb-0">
                     <thead>
-                        <tr><th>ID</th><th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Assigned Domain</th><th>Created</th><th>Last Login</th><th>Access</th><th>Actions</th></tr>
+                        <tr><th>ID</th><th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Assigned Domain</th><th>Telegram Bot</th><th>Created</th><th>Last Login</th><th>Access</th><th>Actions</th></tr>
                     </thead>
                     <tbody>
                         <?php foreach ($users as $user): ?>
@@ -228,6 +273,21 @@ if (isset($sessionsData['data'])) {
                                     </span>
                                 <?php else: ?>
                                     <span class="text-muted">-</span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if (!empty($user['telegram_bot_token']) && !empty($user['telegram_chat_id'])): ?>
+                                    <span class="badge bg-info text-dark" title="Bot Token: <?php echo htmlspecialchars($user['telegram_bot_token']); ?>">
+                                        <i class="fab fa-telegram"></i>
+                                        <?php
+                                            // Show only first 10 chars of token for security
+                                            $shortToken = substr($user['telegram_bot_token'], 0, 10) . '...';
+                                            echo htmlspecialchars($shortToken);
+                                        ?>
+                                    </span>
+                                    <small class="d-block text-muted"><?php echo htmlspecialchars($user['telegram_chat_id']); ?></small>
+                                <?php else: ?>
+                                    <span class="text-muted">Default bot</span>
                                 <?php endif; ?>
                             </td>
                             <td><?php echo date('Y-m-d', strtotime($user['created_at'])); ?></td>
@@ -302,6 +362,11 @@ if (isset($sessionsData['data'])) {
                             </select>
                         </div>
                         <div class="mb-3"><div class="form-check"><input type="checkbox" name="is_active" id="edit_is_active" class="form-check-input"> Active</div></div>
+                        <hr>
+                        <p class="text-muted small"><i class="fab fa-telegram"></i> Telegram Notifications (optional)</p>
+                        <div class="mb-3"><label>Bot Token</label><input type="text" name="telegram_bot_token" id="edit_telegram_bot_token" class="form-control" placeholder="e.g. 123456:ABC-DEF..."></div>
+                        <div class="mb-3"><label>Chat / Channel ID</label><input type="text" name="telegram_chat_id" id="edit_telegram_chat_id" class="form-control" placeholder="e.g. -1001234567890"></div>
+                        <small class="text-muted">Leave blank to use the server's default bot. When set, all alerts for this user's assigned domain go only to this bot &amp; channel.</small>
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
