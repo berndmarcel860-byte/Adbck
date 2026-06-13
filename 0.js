@@ -43,7 +43,22 @@ function getOrCreateBot(token) {
 }
 
 function normalizeDomain(value) {
-    return String(value || '').trim().toLowerCase().replace(/\.+$/, '');
+    let normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) return '';
+
+    try {
+        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(normalized)) {
+            normalized = new URL(normalized).hostname;
+        } else if (/[/?#]/.test(normalized)) {
+            normalized = new URL(`http://${normalized}`).hostname;
+        }
+    } catch (_) {}
+
+    if (normalized.includes(':')) {
+        normalized = normalized.split(':')[0];
+    }
+
+    return normalized.replace(/\.+$/, '');
 }
 
 function isSameDomainOrSubdomain(domainName, mainDomain) {
@@ -93,14 +108,19 @@ function loadTelegramConfigs() {
             const configs = JSON.parse(raw);
             for (const [key, config] of Object.entries(configs)) {
                 if (!config || !config.token || !config.chatId) continue;
-                const hasExplicitDomain = Boolean(config.domain);
-                const userId = config.userId ? String(config.userId) : (key.startsWith('legacy:') ? null : key);
-                const domain = hasExplicitDomain ? config.domain : key.replace(/^legacy:/, '');
+                const keyString = String(key || '').trim();
+                const rawUserId = config.userId !== undefined && config.userId !== null ? String(config.userId).trim() : '';
+                const keyUserId = (!keyString.startsWith('legacy:') && /^\d+$/.test(keyString)) ? keyString : '';
+                const userId = rawUserId || keyUserId || null;
+                const rawDomain = config.domain || keyString.replace(/^legacy:/, '');
+                const domain = normalizeDomain(rawDomain);
                 if (!domain) continue;
+                const configKey = userId || `legacy:${domain}`;
 
-                userTelegramConfigs.set(String(key), { userId, domain, token: config.token, chatId: config.chatId });
+                userTelegramConfigs.set(configKey, { userId, domain, token: config.token, chatId: config.chatId });
                 getOrCreateBot(config.token);
             }
+            saveTelegramConfigs();
             console.log(`📡 Loaded ${userTelegramConfigs.size} user Telegram config(s)`);
         } catch (e) {
             console.error('[TG] Failed to load telegram configs:', e.message);
