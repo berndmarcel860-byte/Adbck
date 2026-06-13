@@ -415,6 +415,16 @@ $uniqueDomains = array_unique($domainsList);
         }
     }
 
+    function showDomainModal() {
+        document.getElementById('domainId').value = '';
+        document.getElementById('domainModalLabel').textContent = 'Add Domain';
+        document.getElementById('domainName').value = '';
+        document.getElementById('domainDescription').value = '';
+        document.getElementById('isWildcard').checked = false;
+        document.getElementById('domainStatus').value = 'active';
+        new bootstrap.Modal(document.getElementById('domainModal')).show();
+    }
+
     function editDomain(id, name, desc, isWildcard, status) {
         document.getElementById('domainId').value = id;
         document.getElementById('domainModalLabel').textContent = 'Edit Domain';
@@ -423,6 +433,36 @@ $uniqueDomains = array_unique($domainsList);
         document.getElementById('isWildcard').checked = isWildcard == 1;
         document.getElementById('domainStatus').value = status;
         new bootstrap.Modal(document.getElementById('domainModal')).show();
+    }
+
+    function saveDomain() {
+        const domainId   = document.getElementById('domainId').value;
+        const domainName = document.getElementById('domainName').value.trim();
+        const description = document.getElementById('domainDescription').value.trim();
+        const isWildcard  = document.getElementById('isWildcard').checked ? 1 : 0;
+        const status      = document.getElementById('domainStatus').value;
+
+        if (!domainName) {
+            showToast('Domain name is required', 'error');
+            return;
+        }
+
+        const isEdit = domainId !== '';
+        const url    = isEdit ? '/admin/api/updateDomain.php' : '/admin/api/createDomain.php';
+        const data   = { domain_name: domainName, description: description, is_wildcard: isWildcard, status: status };
+        if (isEdit) data.domain_id = domainId;
+
+        $.post(url, data)
+            .done(function(response) {
+                if (response.success) {
+                    showToast(isEdit ? 'Domain updated successfully' : 'Domain created successfully', 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('domainModal')).hide();
+                    loadDomains();
+                } else {
+                    showToast(response.error || 'Failed to save domain', 'error');
+                }
+            })
+            .fail(function() { showToast('Request failed', 'error'); });
     }
 
     function deleteDomain(id, name) {
