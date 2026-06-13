@@ -219,8 +219,8 @@ class Auth {
         return false;
     }
     
-    public function logout() {
-        if ($this->isLoggedIn()) {
+    public function logout($logActivity = true) {
+        if ($logActivity && isset($_SESSION['user_id'])) {
             $this->logActivity('logout', 'User logged out');
         }
         session_destroy();
@@ -232,7 +232,7 @@ class Auth {
         // Check session timeout (use constant if defined, otherwise default 3600)
         $timeout = defined('SESSION_TIMEOUT') ? SESSION_TIMEOUT : 3600;
         if (isset($_SESSION['login_time']) && (time() - $_SESSION['login_time'] > $timeout)) {
-            $this->logout();
+            $this->logout(false);
             return false;
         }
         return true;
