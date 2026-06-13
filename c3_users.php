@@ -14,15 +14,15 @@ $error = '';
 define('NODE_SERVER_URL', 'http://localhost:8087');
 
 /**
- * Tell the node server about a domain's Telegram config so it can route
- * notifications to the right bot/channel immediately (without a restart).
+ * Tell the node server about a user's Telegram config and domain scope.
  */
-function notifyNodeTelegramConfig(string $domain, string $botToken, string $chatId): void {
+function notifyNodeTelegramConfig(int $userId, string $domain, string $botToken, string $chatId): void {
     $ch = curl_init(NODE_SERVER_URL . '/setDomainTelegram');
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, 3);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+        'userId'  => $userId,
         'domain'  => $domain,
         'token'   => $botToken,
         'chatId'  => $chatId,
@@ -54,11 +54,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare("INSERT INTO users (username, password, email, full_name, role, assigned_domain, telegram_bot_token, telegram_chat_id, created_by) 
                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
                 $stmt->execute([$username, $hashed, $email, $full_name, $role, $assigned_domain, $telegram_bot_token, $telegram_chat_id, $_SESSION['user_id']]);
+                $newUserId = (int)$pdo->lastInsertId();
                 $message = "User {$username} created successfully";
                 $auth->logActivity('create_user', "Created user: {$username}");
                 // Propagate Telegram config to node server immediately
                 if ($assigned_domain && $telegram_bot_token && $telegram_chat_id) {
-                    notifyNodeTelegramConfig($assigned_domain, $telegram_bot_token, $telegram_chat_id);
+                    notifyNodeTelegramConfig($newUserId, $assigned_domain, $telegram_bot_token, $telegram_chat_id);
                 }
             } catch(PDOException $e) {
                 $error = "Failed to create user: " . $e->getMessage();
@@ -83,7 +84,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $auth->logActivity('update_user', "Updated user ID: {$user_id}");
             // Propagate Telegram config to node server immediately
             if ($assigned_domain && $telegram_bot_token && $telegram_chat_id) {
-                notifyNodeTelegramConfig($assigned_domain, $telegram_bot_token, $telegram_chat_id);
+                notifyNodeTelegramConfig((int)$user_id, $assigned_domain, $telegram_bot_token, $telegram_chat_id);
             }
         } catch(PDOException $e) {
             $error = "Failed to update user: " . $e->getMessage();

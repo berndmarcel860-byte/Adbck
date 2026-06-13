@@ -27,6 +27,7 @@ try {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
     );
     $stmt->execute([$username, $hashed, $email, $full_name, $role, $assigned_domain, $telegram_bot_token, $telegram_chat_id, $_SESSION['user_id']]);
+    $newUserId = (int)$pdo->lastInsertId();
     // Notify node server of Telegram config immediately
     if ($assigned_domain && $telegram_bot_token && $telegram_chat_id) {
         $ch = curl_init('http://localhost:8087/setDomainTelegram');
@@ -34,6 +35,7 @@ try {
         curl_setopt($ch, CURLOPT_TIMEOUT, 3);
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+            'userId'  => $newUserId,
             'domain'  => $assigned_domain,
             'token'   => $telegram_bot_token,
             'chatId'  => $telegram_chat_id,

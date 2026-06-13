@@ -28,6 +28,7 @@ try {
         curl_setopt($ch, CURLOPT_TIMEOUT, 3);
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+            'userId'  => $user_id,
             'domain'  => $assigned_domain,
             'token'   => $telegram_bot_token,
             'chatId'  => $telegram_chat_id,
