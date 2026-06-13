@@ -663,6 +663,7 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
                                 <span class="session-actions">
                                     ${canSendCommands ? `<button type="button" class="btn btn-sm btn-primary" onclick='event.stopPropagation();showCommandModal(${JSON.stringify(session.socketId)})'><i class="fas fa-paper-plane"></i> Command</button>` : ''}
                                     ${canViewDetails ? `<button type="button" class="btn btn-sm btn-outline-primary" onclick='event.stopPropagation();viewSessionDetail(${JSON.stringify(session.socketId)})'><i class="fas fa-eye"></i> View Data</button>` : ''}
+                                    ${canViewDetails ? `<button type="button" class="btn btn-sm btn-outline-danger ms-1" onclick='event.stopPropagation();deleteSession(${JSON.stringify(session.socketId)})'><i class="fas fa-trash"></i></button>` : ''}
                                 </span>
                             </div>
                         </div>
@@ -824,6 +825,26 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
     function toggleSession(sessionId) {
         const element = document.getElementById('session-' + sessionId);
         if (element) element.classList.toggle('show');
+    }
+
+    async function deleteSession(socketId) {
+        if (!confirm('⚠️ Delete this session? This cannot be undone.')) return;
+        try {
+            const response = await fetch('/admin/api/deleteSession.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ socketId })
+            });
+            const data = await response.json();
+            if (data.success) {
+                showToast('Session deleted', 'success');
+                await refreshCurrentPage(true);
+            } else {
+                showToast(data.error || 'Delete failed', 'error');
+            }
+        } catch (e) {
+            showToast('Error deleting session', 'error');
+        }
     }
 
     function updateSearch(value) {
