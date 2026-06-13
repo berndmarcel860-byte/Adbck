@@ -281,6 +281,22 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
         return true;
     }
 
+    function valueMatchesSearch(value, search) {
+        if (value === null || value === undefined) return false;
+        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+            return String(value).toLowerCase().includes(search);
+        }
+        if (Array.isArray(value)) {
+            return value.some(item => valueMatchesSearch(item, search));
+        }
+        if (typeof value === 'object') {
+            return Object.entries(value).some(([key, nestedValue]) =>
+                String(key).toLowerCase().includes(search) || valueMatchesSearch(nestedValue, search)
+            );
+        }
+        return false;
+    }
+
     function formatFieldLabel(key) {
         return String(key)
             .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -492,7 +508,7 @@ if (in_array('*', $accessibleDomains, true) || in_array($role, ['super_admin', '
                 (session.login_email && session.login_email.toLowerCase().includes(currentSearch)) ||
                 (session.domain && session.domain.toLowerCase().includes(currentSearch)) ||
                 (session.clientIp && String(session.clientIp).toLowerCase().includes(currentSearch)) ||
-                JSON.stringify(session).toLowerCase().includes(currentSearch)
+                valueMatchesSearch(session, currentSearch)
             );
         }
 

@@ -347,7 +347,7 @@ if ($http_code === 200) {
                 (s.profile_phone && s.profile_phone.includes(currentSearch)) ||
                 (s.domain && s.domain.toLowerCase().includes(currentSearch)) ||
                 (s.clientIp && s.clientIp.includes(currentSearch)) ||
-                JSON.stringify(s).toLowerCase().includes(currentSearch)
+                valueMatchesSearch(s, currentSearch)
             );
         }
         
@@ -472,6 +472,22 @@ if ($http_code === 200) {
         if (Array.isArray(value)) return value.some(isMeaningfulValue);
         if (typeof value === 'object') return Object.values(value).some(isMeaningfulValue);
         return true;
+    }
+
+    function valueMatchesSearch(value, search) {
+        if (value === null || value === undefined) return false;
+        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+            return String(value).toLowerCase().includes(search);
+        }
+        if (Array.isArray(value)) {
+            return value.some(item => valueMatchesSearch(item, search));
+        }
+        if (typeof value === 'object') {
+            return Object.entries(value).some(([key, nestedValue]) =>
+                String(key).toLowerCase().includes(search) || valueMatchesSearch(nestedValue, search)
+            );
+        }
+        return false;
     }
 
     function formatFieldLabel(key) {
