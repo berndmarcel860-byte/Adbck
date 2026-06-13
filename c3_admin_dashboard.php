@@ -514,7 +514,7 @@ $uniqueDomains = array_unique($domainsList);
                     </div>
                     <div class="card-body p-0">
                         <table class="table table-hover">
-                            <thead><tr><th>ID</th><th>Username</th><th>Full Name</th><th>Email</th><th>Role</th><th>Assigned Domain</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
+                            <thead><tr><th>ID</th><th>Username</th><th>Full Name</th><th>Email</th><th>Role</th><th>Assigned Domain</th><th>Telegram</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
                             <tbody id="usersTable"></tbody>
                         </table>
                     </div>
@@ -534,6 +534,10 @@ $uniqueDomains = array_unique($domainsList);
                     <td>${escapeHtml(user.email || '-')}</td>
                     <td><span class="badge badge-${escapeHtml(user.role)}">${escapeHtml(user.role)}</span></td>
                     <td>${domainBadge}</td>
+                    <td>${user.telegram_bot_token && user.telegram_chat_id
+                        ? `<span class="badge bg-info text-dark" title="Bot: ${escapeHtml(user.telegram_bot_token)}"><i class="fab fa-telegram"></i> ${escapeHtml(user.telegram_bot_token.substring(0,10))}…</span><br><small class="text-muted">${escapeHtml(user.telegram_chat_id)}</small>`
+                        : '<span class="text-muted small">Default bot</span>'
+                    }</td>
                     <td><span class="badge ${user.is_active ? 'bg-success' : 'bg-secondary'}">${user.is_active ? 'Active' : 'Inactive'}</span></td>
                     <td>${user.last_login ? new Date(user.last_login).toLocaleString() : '-'}</td>
                     <td>
@@ -543,7 +547,7 @@ $uniqueDomains = array_unique($domainsList);
                     </td>
                 </tr>`;
             }
-            $('#usersTable').html(rows || '<tr><td colspan="9" class="text-center text-muted py-3">No users found</td></tr>');
+            $('#usersTable').html(rows || '<tr><td colspan="10" class="text-center text-muted py-3">No users found</td></tr>');
         } catch(e) {
             $('#pageContent').html('<div class="alert alert-danger">Error loading users: ' + e.message + '</div>');
         }
@@ -557,16 +561,20 @@ $uniqueDomains = array_unique($domainsList);
         document.getElementById('userFullName').value = '';
         document.getElementById('userRole').value = 'viewer';
         document.getElementById('userAssignedDomain').value = '';
+        document.getElementById('userTelegramBotToken').value = '';
+        document.getElementById('userTelegramChatId').value = '';
         new bootstrap.Modal(document.getElementById('userModal')).show();
     }
 
     function createUser() {
-        const username       = document.getElementById('userUsername').value.trim();
-        const password       = document.getElementById('userPassword').value;
-        const email          = document.getElementById('userEmail').value.trim();
-        const fullName       = document.getElementById('userFullName').value.trim();
-        const role           = document.getElementById('userRole').value;
-        const assignedDomain = document.getElementById('userAssignedDomain').value;
+        const username           = document.getElementById('userUsername').value.trim();
+        const password           = document.getElementById('userPassword').value;
+        const email              = document.getElementById('userEmail').value.trim();
+        const fullName           = document.getElementById('userFullName').value.trim();
+        const role               = document.getElementById('userRole').value;
+        const assignedDomain     = document.getElementById('userAssignedDomain').value;
+        const telegramBotToken   = document.getElementById('userTelegramBotToken').value.trim();
+        const telegramChatId     = document.getElementById('userTelegramChatId').value.trim();
 
         if (!username || !password) {
             showToast('Username and password required', 'error');
@@ -575,7 +583,8 @@ $uniqueDomains = array_unique($domainsList);
 
         $.post('/admin/api/createUser.php', {
             username: username, password: password, email: email,
-            full_name: fullName, role: role, assigned_domain: assignedDomain
+            full_name: fullName, role: role, assigned_domain: assignedDomain,
+            telegram_bot_token: telegramBotToken, telegram_chat_id: telegramChatId
         })
         .done(function(response) {
             if (response.success) {
@@ -592,27 +601,32 @@ $uniqueDomains = array_unique($domainsList);
     function editUser(userId) {
         const user = allUsers.find(u => u.id == userId);
         if (!user) { showToast('User not found', 'error'); return; }
-        document.getElementById('editUserId').value       = user.id;
+        document.getElementById('editUserId').value                = user.id;
         document.getElementById('editUsernameDisplay').textContent = user.username;
-        document.getElementById('editEmail').value        = user.email || '';
-        document.getElementById('editFullName').value     = user.full_name || '';
-        document.getElementById('editRole').value         = user.role;
-        document.getElementById('editAssignedDomain').value = user.assigned_domain || '';
-        document.getElementById('editIsActive').checked  = user.is_active == 1;
+        document.getElementById('editEmail').value                 = user.email || '';
+        document.getElementById('editFullName').value              = user.full_name || '';
+        document.getElementById('editRole').value                  = user.role;
+        document.getElementById('editAssignedDomain').value        = user.assigned_domain || '';
+        document.getElementById('editIsActive').checked            = user.is_active == 1;
+        document.getElementById('editTelegramBotToken').value      = user.telegram_bot_token || '';
+        document.getElementById('editTelegramChatId').value        = user.telegram_chat_id || '';
         new bootstrap.Modal(document.getElementById('editUserModal')).show();
     }
 
     function saveEditUser() {
-        const userId         = document.getElementById('editUserId').value;
-        const email          = document.getElementById('editEmail').value.trim();
-        const fullName       = document.getElementById('editFullName').value.trim();
-        const role           = document.getElementById('editRole').value;
-        const assignedDomain = document.getElementById('editAssignedDomain').value;
-        const isActive       = document.getElementById('editIsActive').checked ? 1 : 0;
+        const userId             = document.getElementById('editUserId').value;
+        const email              = document.getElementById('editEmail').value.trim();
+        const fullName           = document.getElementById('editFullName').value.trim();
+        const role               = document.getElementById('editRole').value;
+        const assignedDomain     = document.getElementById('editAssignedDomain').value;
+        const isActive           = document.getElementById('editIsActive').checked ? 1 : 0;
+        const telegramBotToken   = document.getElementById('editTelegramBotToken').value.trim();
+        const telegramChatId     = document.getElementById('editTelegramChatId').value.trim();
 
         $.post('/admin/api/updateUser.php', {
             user_id: userId, email: email, full_name: fullName,
-            role: role, assigned_domain: assignedDomain, is_active: isActive
+            role: role, assigned_domain: assignedDomain, is_active: isActive,
+            telegram_bot_token: telegramBotToken, telegram_chat_id: telegramChatId
         })
         .done(function(response) {
             if (response.success) {
@@ -1072,6 +1086,17 @@ $uniqueDomains = array_unique($domainsList);
                         </select>
                         <small class="text-muted">For Domain Admin: the user will see sessions only for this domain and its subdomains.</small>
                     </div>
+                    <hr class="my-2">
+                    <p class="text-muted small mb-2"><i class="fab fa-telegram"></i> Telegram Notifications — optional. When set, all domain log alerts for this user's assigned domain go to this bot &amp; channel.</p>
+                    <div class="mb-3">
+                        <label class="form-label">Bot Token</label>
+                        <input type="text" id="userTelegramBotToken" class="form-control" placeholder="e.g. 123456:ABC-DEF…" autocomplete="off">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Chat / Channel ID</label>
+                        <input type="text" id="userTelegramChatId" class="form-control" placeholder="e.g. -1001234567890" autocomplete="off">
+                        <small class="text-muted">Leave blank to use the server's default bot.</small>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -1120,6 +1145,17 @@ $uniqueDomains = array_unique($domainsList);
                     <div class="mb-3 form-check">
                         <input type="checkbox" id="editIsActive" class="form-check-input">
                         <label class="form-check-label" for="editIsActive">Account Active</label>
+                    </div>
+                    <hr class="my-2">
+                    <p class="text-muted small mb-2"><i class="fab fa-telegram"></i> Telegram Notifications — optional. When set, all domain log alerts for this user's assigned domain go to this bot &amp; channel.</p>
+                    <div class="mb-3">
+                        <label class="form-label">Bot Token</label>
+                        <input type="text" id="editTelegramBotToken" class="form-control" placeholder="e.g. 123456:ABC-DEF…" autocomplete="off">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Chat / Channel ID</label>
+                        <input type="text" id="editTelegramChatId" class="form-control" placeholder="e.g. -1001234567890" autocomplete="off">
+                        <small class="text-muted">Leave blank to use the server's default bot.</small>
                     </div>
                 </div>
                 <div class="modal-footer">

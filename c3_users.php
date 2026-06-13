@@ -23,9 +23,9 @@ function notifyNodeTelegramConfig(string $domain, string $botToken, string $chat
     curl_setopt($ch, CURLOPT_TIMEOUT, 3);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
-        'domain'    => $domain,
-        'bot_token' => $botToken,
-        'chat_id'   => $chatId,
+        'domain'  => $domain,
+        'token'   => $botToken,
+        'chatId'  => $chatId,
     ]));
     curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
     curl_exec($ch);
