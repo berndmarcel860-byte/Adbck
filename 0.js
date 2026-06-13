@@ -974,7 +974,7 @@ wss.on('connection', (ws, req) => {
     }
     
     // Handle incoming messages
-    ws.on('message', (raw) => {
+    ws.on('message', async (raw) => {
         const msg = raw.toString();
         console.log(`[MSG] ${socketId} (${domain}): ${msg.substring(0, 100)}`);
         
